@@ -22,7 +22,7 @@ python3 tools/crear_paquete.py --modo completo  # texto entero sin secciones de 
 ```
 Descarga ~5 GB de volcado y tarda una o dos horas. Después, en la app: *Descargas → Paquete → elegir los archivos*.
 Si copias la carpeta `paquete/` junto a la app en tu hosting, el botón *Descargar paquete de este sitio* los baja solo.
-Los archivos de tipo `.ndjson.gz` pesan menos de 100 MB cada uno (`--por-archivo`), por lo que caben en GitHub Pages.
+En modo resumen cada archivo pesa unos 25 MB y todo cabe en GitHub Pages. El modo completo es demasiado grande para alojarlo ahí (copia los archivos al móvil a mano).
 
 Sin conexión funcionan la lectura, la búsqueda por título, el artículo al azar y la lectura en voz alta
 con las voces del dispositivo.
