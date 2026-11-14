@@ -182,7 +182,7 @@ function textToHtml(t) {
   }).join('');
 }
 
-const pack = { running: false, stop: false, pct: 0, msg: '', done: 0, total: 0, error: '' };
+const pack = { complete: false, running: false, stop: false, pct: 0, msg: '', done: 0, total: 0, error: '' };
 const dl = $('#dl');
 function paintPack() {
   dl.hidden = !pack.running && !pack.error;
@@ -190,7 +190,7 @@ function paintPack() {
   $('#dlBar').value = pack.pct; $('#dlBar').hidden = !pack.running;
   const st = $('#pkgState'); if (st) st.textContent = pack.error || pack.msg;
   const bar = $('#pkgBar'); if (bar) { bar.value = pack.pct; bar.hidden = !pack.running; }
-  const go = $('#pkgGo'); if (go) { go.disabled = pack.running; go.textContent = pack.done && pack.done === pack.total ? '✓ Todo descargado' : 'Descargar todo'; }
+  const go = $('#pkgGo'); if (go) { go.disabled = pack.running || pack.complete; go.textContent = pack.complete ? '✓ Todo descargado' : 'Descargar todo'; }
 }
 
 async function importShard(blob, name) {
@@ -219,7 +219,8 @@ async function installPack() {
   pack.running = true; pack.stop = false; pack.error = ''; pack.msg = 'Preparando la descarga…'; paintPack();
   try {
     navigator.storage?.persist?.();
-    const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
+    const m = await getManifest();
+    if (!m) throw new Error('SIN_PAQUETE');
     let st = (await db.kvGet('pack')) || {};
     if (st.id !== m.articulos + ':' + m.archivos.length) st = { id: m.articulos + ':' + m.archivos.length, done: [] };
     pack.total = m.archivos.length; pack.done = st.done.length;
@@ -234,22 +235,32 @@ async function installPack() {
       if (pack.stop) break;
       st.done.push(name); pack.done = st.done.length; await db.kvSet('pack', st);
     }
-    pack.pct = 100;
+    pack.pct = 100; pack.complete = !pack.stop;
     pack.msg = pack.stop ? 'Descarga en pausa.' : `Listo ✓ ${(await db.countArticles()).toLocaleString('es')} artículos disponibles sin conexión.`;
   } catch (e) {
-    pack.error = /quota|storage/i.test(e.message) ? 'No hay espacio suficiente en el móvil.' : 'La descarga se ha interrumpido (' + e.message + '). Se reanuda sola al volver a abrir la app con conexión.';
+    pack.error = e.message === 'SIN_PAQUETE' ? 'El paquete de artículos todavía no está publicado. Vuelve a abrir la app más tarde.'
+      : /quota|storage/i.test(e.message) ? 'No hay espacio suficiente en el móvil.'
+      : 'La descarga se ha interrumpido (' + e.message + '). Se reanuda sola al volver a abrir la app con conexión.';
   }
   pack.running = false; paintPack();
   if (location.hash.length < 3 || location.hash === '#/descargas') route();
-if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
 }
 
-async function packIsComplete() {
+async function getManifest() {
   try {
-    const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
-    const st = (await db.kvGet('pack')) || {};
-    return st.id === m.articulos + ':' + m.archivos.length && st.done?.length === m.archivos.length;
-  } catch { return true; } // sin conexión o sin paquete: no insistir
+    const r = await fetch('paquete/manifest.json', { cache: 'no-store' });
+    if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+/** true = hay que descargar; false = ya está todo (o no hay paquete / no hay conexión). */
+async function packPending() {
+  const m = await getManifest(); if (!m) return false;
+  const st = (await db.kvGet('pack')) || {};
+  const ok = st.id === m.articulos + ':' + m.archivos.length && st.done?.length === m.archivos.length;
+  pack.complete = ok; return !ok;
 }
 
 function downloads() {
@@ -265,7 +276,7 @@ function downloads() {
     </div>`;
   $('#pkgGo').onclick = () => { if (!navigator.onLine) return toast('Necesitas conexión para descargar.'); installPack(); };
   $('#pkgStop').onclick = () => { pack.stop = true; };
-  packIsComplete().then(ok => { if (ok && !pack.running) { pack.msg = 'Todo descargado: ya puedes usar Dariopedia sin conexión.'; pack.done = pack.total = 1; } paintPack(); });
+  packPending().then(p => { if (pack.complete && !pack.running) pack.msg = 'Todo descargado: ya puedes usar Dariopedia sin conexión.'; else if (!pack.running && !pack.error && p === false) pack.msg = 'El paquete todavía no está disponible.'; paintPack(); });
   paintPack();
 }
 
@@ -392,7 +403,7 @@ selBtn.onclick = () => { readText(getSelection().toString(), prefs.lang); selBtn
 function go(hash, replace) {
   if (replace) { history.replaceState(null, '', hash); return route(); }
   if (location.hash === hash) return route();
-if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
   location.hash = hash; // triggers route() via hashchange
 }
 async function route() {
@@ -418,4 +429,4 @@ addEventListener('online', net); addEventListener('offline', net); net();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 await voice.loadSettings();
 route();
-if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
