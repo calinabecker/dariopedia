@@ -38,14 +38,20 @@ async function unpack(v) {
 }
 
 /** Save many articles in one transaction: [{lang, title, html}] */
-export async function putArticles(list) {
-  const packed = await Promise.all(list.map(async a => ({ ...a, data: await pack(a.html), size: a.html.length })));
+export async function putArticles(list, group = 4) {
+  // Comprimimos en grupos pequeños: cientos de streams a la vez agotan la memoria del iPhone.
+  const packed = [];
+  for (let i = 0; i < list.length; i += group)
+    packed.push(...await Promise.all(list.slice(i, i + group).map(async a => {
+      const body = a.text ?? a.html;
+      return { ...a, data: await pack(body), size: body.length, t: a.text != null ? 1 : 0 };
+    })));
   const db = await openDB();
   const tx = db.transaction(['articles', 'titles'], 'readwrite');
   const now = Date.now();
   for (const a of packed) {
     const key = keyOf(a.lang, a.title);
-    tx.objectStore('articles').put({ key, data: a.data });
+    tx.objectStore('articles').put({ key, data: a.data, t: a.t });
     tx.objectStore('titles').put({ key, lang: a.lang, title: a.title.replace(/_/g, ' '), norm: norm(a.title), size: a.size, savedAt: now });
   }
   return done(tx);
@@ -55,8 +61,13 @@ export const putArticle = a => putArticles([a]);
 export async function getArticle(lang, title) {
   const db = await openDB();
   const rec = await req(db.transaction('articles').objectStore('articles').get(keyOf(lang, title)));
-  return rec ? unpack(rec.data) : null;
+  if (!rec) return null;
+  const body = await unpack(rec.data);
+  return rec.t && renderer ? renderer(body) : body;
 }
+let renderer = null;
+/** Los artículos del paquete se guardan como texto plano; se convierten a HTML al abrirlos. */
+export const setRenderer = fn => { renderer = fn; };
 
 export async function hasArticle(lang, title) {
   const db = await openDB();

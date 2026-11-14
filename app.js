@@ -182,6 +182,7 @@ function textToHtml(t) {
   }).join('');
 }
 
+db.setRenderer(textToHtml);
 const pack = { complete: false, running: false, stop: false, pct: 0, msg: '', done: 0, total: 0, error: '' };
 const dl = $('#dl');
 function paintPack() {
@@ -193,21 +194,21 @@ function paintPack() {
   const go = $('#pkgGo'); if (go) { go.disabled = pack.running || pack.complete; go.textContent = pack.complete ? '✓ Todo descargado' : 'Descargar todo'; }
 }
 
-async function importShard(blob, name) {
-  let stream = blob.stream().pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream());
-  const reader = stream.getReader();
+async function importShard(body, lowMem) {
+  const reader = body.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
+  const size = lowMem ? 50 : 150;
   let rest = '', batch = [], n = 0;
-  const flush = async () => { if (batch.length) { n += batch.length; await db.putArticles(batch); batch = []; } };
+  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await db.putArticles(b, lowMem ? 1 : 4); } };
   const handle = line => {
     if (!line) return;
     let o; try { o = JSON.parse(line); } catch { return; }
-    if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: textToHtml(o.text) });
+    if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, text: o.text });
   };
   while (!pack.stop) {
     const { value, done } = await reader.read(); if (done) break;
     const lines = (rest + value).split('\n'); rest = lines.pop();
     lines.forEach(handle);
-    if (batch.length >= 200) await flush();
+    if (batch.length >= size) { await flush(); await new Promise(r => setTimeout(r)); } // deja respirar al navegador
   }
   if (!pack.stop) handle(rest);
   await flush(); reader.cancel().catch(() => {});
@@ -223,6 +224,10 @@ async function installPack() {
     if (!m) throw new Error('SIN_PAQUETE');
     let st = (await db.kvGet('pack')) || {};
     if (st.id !== m.articulos + ':' + m.archivos.length) st = { id: m.articulos + ':' + m.archivos.length, done: [] };
+    // Si la sesión anterior se cerró sola (falta de memoria), seguimos en modo ligero.
+    if (st.busy) st.crashes = (st.crashes || 0) + 1;
+    const lowMem = (st.crashes || 0) > 0;
+    st.busy = true; await db.kvSet('pack', st);
     pack.total = m.archivos.length; pack.done = st.done.length;
     for (const [i, name] of m.archivos.entries()) {
       if (st.done.includes(name)) continue;
@@ -231,20 +236,22 @@ async function installPack() {
       pack.msg = `Descargando Dariopedia sin conexión… ${Math.round(pack.pct)} % (no cierres la app)`; paintPack();
       const r = await fetch('paquete/' + name, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      await importShard(await r.blob(), name);
+      await importShard(r.body, lowMem);
       if (pack.stop) break;
       st.done.push(name); pack.done = st.done.length; await db.kvSet('pack', st);
     }
+    st.busy = false; await db.kvSet('pack', st);
     pack.pct = 100; pack.complete = !pack.stop;
     pack.msg = pack.stop ? 'Descarga en pausa.' : `Listo ✓ ${(await db.countArticles()).toLocaleString('es')} artículos disponibles sin conexión.`;
   } catch (e) {
+    try { const s2 = (await db.kvGet('pack')) || {}; s2.busy = false; await db.kvSet('pack', s2); } catch {}
     pack.error = e.message === 'SIN_PAQUETE' ? 'El paquete de artículos todavía no está publicado. Vuelve a abrir la app más tarde.'
       : /quota|storage/i.test(e.message) ? 'No hay espacio suficiente en el móvil.'
       : 'La descarga se ha interrumpido (' + e.message + '). Se reanuda sola al volver a abrir la app con conexión.';
   }
   pack.running = false; paintPack();
   if (location.hash.length < 3 || location.hash === '#/descargas') route();
-if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
 }
 
 async function getManifest() {
@@ -256,9 +263,10 @@ async function getManifest() {
 }
 
 /** true = hay que descargar; false = ya está todo (o no hay paquete / no hay conexión). */
-async function packPending() {
+async function packPending(auto) {
   const m = await getManifest(); if (!m) return false;
   const st = (await db.kvGet('pack')) || {};
+  if (auto && (st.crashes || 0) >= 3 && st.busy) { pack.error = 'La descarga se ha cerrado varias veces. Pulsa «Descargar todo» en Descargas para continuar.'; return false; }
   const ok = st.id === m.articulos + ':' + m.archivos.length && st.done?.length === m.archivos.length;
   pack.complete = ok; return !ok;
 }
@@ -403,7 +411,7 @@ selBtn.onclick = () => { readText(getSelection().toString(), prefs.lang); selBtn
 function go(hash, replace) {
   if (replace) { history.replaceState(null, '', hash); return route(); }
   if (location.hash === hash) return route();
-if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
   location.hash = hash; // triggers route() via hashchange
 }
 async function route() {
@@ -429,4 +437,4 @@ addEventListener('online', net); addEventListener('offline', net); net();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 await voice.loadSettings();
 route();
-if (navigator.onLine) packPending().then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
