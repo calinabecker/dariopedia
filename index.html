@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dariopedia</title>
+<meta name="description" content="Dariopedia: la enciclopedia libre, disponible sin conexión.">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <a href="#/" class="brand"><img src="icons/icon.svg" alt=""><span>Dariopedia</span></a>
+  <form id="searchForm" class="search" role="search">
+    <input id="q" type="search" placeholder="Buscar en Dariopedia…" autocomplete="off" aria-label="Buscar">
+  </form>
+  <nav class="nav">
+    <a href="#/descargas" title="Descargar artículos">⬇︎<span> Descargas</span></a>
+    <a href="#/ajustes" title="Ajustes">⚙︎<span> Ajustes</span></a>
+  </nav>
+</header>
+<div id="net" class="net" hidden>Sin conexión — mostrando solo lo guardado</div>
+<main id="view"></main>
+<div id="player" class="player" hidden>
+  <span id="playerState">Leyendo…</span>
+  <button id="stopBtn" type="button">■ Detener</button>
+</div>
+<button id="selBtn" class="selbtn" type="button" hidden>🔊 Leer selección</button>
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
