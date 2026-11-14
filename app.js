@@ -199,11 +199,14 @@ function downloads() {
       <div id="prog" style="margin-top:14px" hidden><progress id="bar" max="100" value="0"></progress><p class="hint" id="progTxt"></p></div>
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Importar un volcado completo (recomendado para “todo”)</h3>
-      <p class="hint">Para tener <b>toda</b> la Wikipedia, lo más rápido es descargar el volcado oficial HTML de Wikimedia
-      (<a href="https://dumps.wikimedia.org/other/enterprise_html/runs/" target="_blank" rel="noopener">dumps.wikimedia.org → enterprise_html</a>,
-      archivo <code>${prefs.lang}wiki-NS0-…-ENTERPRISE-HTML.json.tar.gz</code>) e importarlo acá. También acepta paquetes exportados desde Dariopedia (.ndjson / .ndjson.gz).</p>
-      <input type="file" id="imp" accept=".json,.ndjson,.gz,.tgz,application/gzip,application/json">
+      <h3 style="margin-top:0">Paquete completo sin imágenes (recomendado)</h3>
+      <p class="hint">Toda la Wikipedia en solo texto, muy comprimida. Se genera con <code>tools/crear_paquete.py</code>
+      (modo <b>resumen</b>: la introducción de cada artículo, unos pocos cientos de MB; modo <b>completo</b>: el texto entero, varios GB).
+      Impórtalo aquí: acepta varios archivos <code>.ndjson.gz</code> a la vez.</p>
+      <div class="row"><button class="btn primary" id="pkgSite">Descargar paquete de este sitio</button></div>
+      <label for="imp">…o elige los archivos del paquete</label>
+      <input type="file" id="imp" multiple accept=".json,.ndjson,.gz,.tgz,application/gzip,application/json">
+      <p class="hint">También acepta el volcado HTML oficial de Wikimedia (<code>enterprise_html</code>), pero ocupa decenas de GB: no lo recomiendo en el móvil.</p>
       <div id="impProg" hidden style="margin-top:10px"><progress id="impBar" max="100" value="0"></progress><p class="hint" id="impTxt"></p>
       <button class="btn" id="impStop">Detener importación</button></div>
     </div>`;
@@ -220,8 +223,22 @@ function downloads() {
   $('#startDl').onclick = startDownload;
   $('#stopDl').onclick = () => { if (job) job.stop = true; };
   if (job) showJob();
-  $('#imp').onchange = e => e.target.files[0] && importFile(e.target.files[0]);
+  $('#imp').onchange = e => e.target.files.length && importFiles(e.target.files);
   $('#impStop').onclick = () => { if (importJob) importJob.stop = true; };
+  $('#pkgSite').onclick = async () => {
+    if (!navigator.onLine) return toast('Necesitas conexión para descargar el paquete.');
+    try {
+      $('#impProg').hidden = false; $('#impTxt').textContent = 'Buscando el paquete…';
+      const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
+      const files = [];
+      for (const [i, n] of m.archivos.entries()) {
+        $('#impTxt').textContent = `Descargando ${n} (${i + 1}/${m.archivos.length})…`;
+        const r = await fetch('paquete/' + n); if (!r.ok) throw new Error('HTTP ' + r.status + ' en ' + n);
+        files.push(new File([await r.blob()], n));
+        if (files.length === 3 || i === m.archivos.length - 1) { await importFiles(files.splice(0)); if (importJob === null && /Error/.test($('#impTxt').textContent)) return; }
+      }
+    } catch (e) { $('#impTxt').textContent = 'No hay paquete en este sitio o falló la descarga: ' + e.message; }
+  };
 }
 
 async function* titleSource(src, lang) {
@@ -299,13 +316,31 @@ function showJob(j = job) {
 }
 
 /* ---------------- Import / export ---------------- */
+/** Paquete de texto plano (tools/crear_paquete.py): párrafos y "## Título" → HTML. */
+function textToHtml(t) {
+  return t.split('\n\n').map(p => {
+    const m = p.match(/^(#{2,4}) (.*)$/);
+    return m ? `<h${m[1].length}>${esc(m[2])}</h${m[1].length}>` : `<p>${esc(p).replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+}
+
 let importJob = null;
-async function importFile(file) {
+async function importFiles(files) {
   if (importJob) return;
   navigator.storage?.persist?.();
   importJob = { stop: false };
   $('#impProg').hidden = false;
-  let read = 0, count = 0, bad = 0, batch = [];
+  const total = [...files].reduce((n, f) => n + f.size, 0);
+  let read = 0, count = 0, bad = 0, batch = [], err = '';
+  for (const file of [...files].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (importJob.stop || err) break;
+    $('#impTxt').textContent = `Importando ${file.name}…`;
+    await importOne(file);
+  }
+  $('#impTxt').textContent = err || `${importJob.stop ? 'Detenido' : 'Listo ✓'} — ${count.toLocaleString('es')} artículos importados${bad ? ` (${bad} líneas ilegibles)` : ''}.`;
+  importJob = null;
+
+  async function importOne(file) {
   const counter = new TransformStream({ transform(ch, ctl) { read += ch.byteLength; ctl.enqueue(ch); } });
   let stream = file.stream().pipeThrough(counter);
   if (/\.(gz|tgz)$/i.test(file.name)) stream = stream.pipeThrough(new DecompressionStream('gzip'));
@@ -315,6 +350,7 @@ async function importFile(file) {
     const i = line.indexOf('{'); if (i < 0) return;
     let o; try { o = JSON.parse(line.slice(i)); } catch { bad++; return; }
     if (o.html && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: o.html });
+    else if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: textToHtml(o.text) });
     else if (o.article_body?.html && o.name && (o.namespace?.identifier ?? 0) === 0)
       batch.push({ lang: o.in_language?.identifier || prefs.lang, title: o.name, html: cleanHTML(o.article_body.html, o.in_language?.identifier || prefs.lang) });
   };
@@ -325,15 +361,15 @@ async function importFile(file) {
       const lines = (rest + value).split('\n'); rest = lines.pop();
       for (const l of lines) handle(l);
       if (batch.length >= 100) { count += batch.length; await db.putArticles(batch); batch = [];
-        $('#impBar').value = (read / file.size) * 100;
-        $('#impTxt').textContent = `${count.toLocaleString('es')} artículos importados · ${fmtBytes(read)} de ${fmtBytes(file.size)}`; }
+        $('#impBar').value = (read / total) * 100;
+        $('#impTxt').textContent = `${count.toLocaleString('es')} artículos importados · ${file.name}`; }
     }
     if (!importJob.stop) handle(rest);
     if (batch.length) { count += batch.length; await db.putArticles(batch); }
-    $('#impTxt').textContent = `${importJob.stop ? 'Detenido' : 'Listo ✓'} — ${count.toLocaleString('es')} artículos importados${bad ? ` (${bad} líneas ilegibles)` : ''}.`;
   } catch (e) {
-    $('#impTxt').textContent = `Error: ${e.message}. Se importaron ${count} artículos (¿se llenó el almacenamiento?).`;
-  } finally { reader.cancel().catch(() => {}); importJob = null; }
+    err = `Error: ${e.message}. Se importaron ${count} artículos (¿se llenó el almacenamiento?).`;
+  } finally { reader.cancel().catch(() => {}); }
+  }
 }
 
 async function exportAll() {

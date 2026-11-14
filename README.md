@@ -10,9 +10,19 @@ La Wikipedia, instalable como app (PWA) y usable **sin conexión**.
    - Todo artículo que abres se guarda automáticamente (con imágenes).
    - **Descargas**: artículos destacados, una categoría completa, al azar, una lista de títulos
      o *toda* la Wikipedia (reanudable, pero muy lento por la API).
-   - **Todo de una vez**: descarga el volcado oficial HTML de Wikimedia
-     (`https://dumps.wikimedia.org/other/enterprise_html/runs/` → `eswiki-NS0-…-ENTERPRISE-HTML.json.tar.gz`)
-     e impórtalo desde *Descargas → Importar*. Se procesa en streaming y se guarda comprimido.
+   - **Paquete completo sin imágenes** (lo recomendado): ver abajo.
+
+## Paquete sin imágenes (poco espacio)
+`tools/crear_paquete.py` convierte el volcado oficial de Wikimedia en archivos `.ndjson.gz` de solo texto
+(sin imágenes, tablas, fichas ni referencias). Solo necesita Python 3:
+
+```
+python3 tools/crear_paquete.py                  # modo resumen: introducción de cada artículo (≈ cientos de MB)
+python3 tools/crear_paquete.py --modo completo  # texto entero sin secciones de relleno (varios GB)
+```
+Descarga ~5 GB de volcado y tarda una o dos horas. Después, en la app: *Descargas → Paquete → elegir los archivos*.
+Si copias la carpeta `paquete/` junto a la app en tu hosting, el botón *Descargar paquete de este sitio* los baja solo.
+Los archivos de tipo `.ndjson.gz` pesan menos de 100 MB cada uno (`--por-archivo`), por lo que caben en GitHub Pages.
 
 Sin conexión funcionan la lectura, la búsqueda por título, el artículo al azar y la lectura en voz alta
 con las voces del dispositivo.
