@@ -1,7 +1,7 @@
 {
   "name": "Dariopedia",
   "short_name": "Dariopedia",
-  "description": "La enciclopedia libre, disponible sin conexión.",
+  "description": "La enciclopedia, disponible sin conexión.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -10,7 +10,6 @@
   "lang": "es",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

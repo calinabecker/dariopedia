@@ -1,8 +1,8 @@
 // Dariopedia service worker: app shell precache + image cache for offline use.
-const SHELL = 'dariopedia-shell-v4';
+const SHELL = 'dariopedia-shell-v5';
 const IMG = 'dariopedia-img';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'voice.js',
-  'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
+  'manifest.webmanifest', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

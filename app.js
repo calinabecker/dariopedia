@@ -22,7 +22,7 @@ async function api(lang, params, tries = 4) {
   for (let i = 0; ; i++) {
     const r = await fetch(u);
     if (r.ok) { const j = await r.json(); if (j.error?.code !== 'maxlag' || i >= tries) return j; }
-    else if (!(r.status === 429 || r.status >= 500) || i >= tries) throw new Error(r.status === 429 ? 'Wikipedia está limitando las solicitudes (429), prueba en un rato' : 'HTTP ' + r.status);
+    else if (!(r.status === 429 || r.status >= 500) || i >= tries) throw new Error(r.status === 429 ? 'Dariopedia está recibiendo demasiadas solicitudes (429), prueba en un rato' : 'HTTP ' + r.status);
     const wait = (+r.headers.get('retry-after') || 2 ** i) * 1000;
     await new Promise(res => setTimeout(res, Math.min(wait, 30000)));
   }
@@ -85,7 +85,7 @@ async function home() {
   view.innerHTML = `
     <section class="hero">
       <h1>Dariopedia</h1>
-      <p>La enciclopedia libre, disponible sin conexión.</p>
+      <p>La enciclopedia, disponible sin conexión.</p>
       <div class="stats">
         <div><b>${n.toLocaleString('es')}</b>artículos guardados</div>
         ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>ocupa en tu móvil</div><div><b>${fmtBytes(Math.max(0, (est.quota || 0) - (est.usage || 0)))}</b>de espacio disponible</div>` : ''}
@@ -117,15 +117,15 @@ async function search(q) {
     ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge ok">sin conexión</span></li>`).join('')}</ul>`
     : '<p class="hint">No hay nada guardado con ese título.</p>');
   if (!navigator.onLine) return;
-  $('#onl').innerHTML = '<div class="card"><p class="hint">Buscando en Wikipedia…</p></div>';
+  $('#onl').innerHTML = '<div class="card"><p class="hint">Buscando en línea…</p></div>';
   try {
     const j = await api(prefs.lang, { action: 'query', list: 'search', srsearch: q, srlimit: 20, srprop: 'snippet' });
     const hits = j.query.search;
     const have = await Promise.all(hits.map(h => db.hasArticle(prefs.lang, h.title)));
-    $('#onl').innerHTML = `<div class="card"><h3 style="margin-top:0">En Wikipedia (${hits.length})</h3><ul class="list">${hits.map((h, i) =>
+    $('#onl').innerHTML = `<div class="card"><h3 style="margin-top:0">En línea (${hits.length})</h3><ul class="list">${hits.map((h, i) =>
       `<li><a href="${articleHref(prefs.lang, h.title)}">${esc(h.title)}</a>${have[i] ? '<span class="badge ok">sin conexión</span>' : ''}<small>${h.snippet.replace(/<(?!\/?span)[^>]+>/g, '')}…</small></li>`).join('')}</ul></div>`;
     if (!exact && hits[0] && db.norm(hits[0].title) === db.norm(q)) go(articleHref(prefs.lang, hits[0].title), true);
-  } catch (e) { $('#onl').innerHTML = `<div class="card"><p class="hint">No se ha podido buscar en Wikipedia: ${esc(e.message)}</p></div>`; }
+  } catch (e) { $('#onl').innerHTML = `<div class="card"><p class="hint">No se ha podido buscar en línea: ${esc(e.message)}</p></div>`; }
 }
 
 async function article(lang, title) {
@@ -154,10 +154,9 @@ async function article(lang, title) {
         <button class="btn" id="readAll">🔊 Leer artículo</button>
         <button class="btn" id="saveBtn">${saved ? '✓ Guardado sin conexión' : '⬇︎ Guardar sin conexión'}</button>
         ${saved ? '<button class="btn danger" id="delBtn">Eliminar</button>' : ''}
-        <a class="btn" href="https://${lang}.wikipedia.org/wiki/${encodeURIComponent(shownTitle.replace(/ /g, '_'))}" target="_blank" rel="noopener">Ver original ↗</a>
       </div>
       <div id="body">${html}</div>
-      <p class="attrib">Texto procedente de la Wikipedia, disponible bajo la licencia Creative Commons Atribución-CompartirIgual 4.0.</p>
+      <p class="attrib">Contenido disponible bajo la licencia Creative Commons Atribución-CompartirIgual 4.0.</p>
     </article>`;
   $('#saveBtn').onclick = async () => {
     if (saved) return;
@@ -179,7 +178,7 @@ let job = null;
 
 function downloads() {
   view.innerHTML = `
-    <h2>Descargar Wikipedia para usar sin conexión</h2>
+    <h2>Descargar Dariopedia para usar sin conexión</h2>
     <div class="card">
       <label for="src">¿Qué quieres descargar?</label>
       <select id="src">
@@ -187,7 +186,7 @@ function downloads() {
         <option value="category">Una categoría completa</option>
         <option value="random">Artículos al azar</option>
         <option value="list">Lista de títulos</option>
-        <option value="all">TODA la Wikipedia (muy lento, se puede pausar y reanudar)</option>
+        <option value="all">TODO Dariopedia (muy lento, se puede pausar y reanudar)</option>
       </select>
       <div id="opt"></div>
       <label for="max">Máximo de artículos en esta tanda</label>
@@ -200,13 +199,12 @@ function downloads() {
     </div>
     <div class="card">
       <h3 style="margin-top:0">Paquete completo sin imágenes (recomendado)</h3>
-      <p class="hint">Toda la Wikipedia en solo texto, muy comprimida. Se genera con <code>tools/crear_paquete.py</code>
+      <p class="hint">Todo Dariopedia en solo texto, muy comprimido. Se genera con <code>tools/crear_paquete.py</code>
       (modo <b>resumen</b>: la introducción de cada artículo, unos pocos cientos de MB; modo <b>completo</b>: el texto entero, varios GB).
       Impórtalo aquí: acepta varios archivos <code>.ndjson.gz</code> a la vez.</p>
       <div class="row"><button class="btn primary" id="pkgSite">Descargar paquete de este sitio</button></div>
       <label for="imp">…o elige los archivos del paquete</label>
       <input type="file" id="imp" multiple accept=".json,.ndjson,.gz,.tgz,application/gzip,application/json">
-      <p class="hint">También acepta el volcado HTML oficial de Wikimedia (<code>enterprise_html</code>), pero ocupa decenas de GB: no lo recomiendo en el móvil.</p>
       <div id="impProg" hidden style="margin-top:10px"><progress id="impBar" max="100" value="0"></progress><p class="hint" id="impTxt"></p>
       <button class="btn" id="impStop">Detener importación</button></div>
     </div>`;
@@ -216,7 +214,7 @@ function downloads() {
     opt.innerHTML = v === 'category' ? `<label for="cat">Nombre de la categoría</label><input id="cat" type="text" placeholder="Ej: Argentina, Física, Mamíferos">
         <label><input type="checkbox" id="sub" checked style="width:auto"> Incluir subcategorías (1 nivel)</label>`
       : v === 'list' ? `<label for="titles">Un título por línea</label><textarea id="titles" rows="6"></textarea>`
-      : v === 'all' ? `<p class="hint">Recorre todos los artículos en orden alfabético y recuerda dónde quedó. La Wikipedia en español tiene ~2 millones de artículos; a esta velocidad son semanas. Para todo, usa mejor la importación del volcado de abajo.</p>`
+      : v === 'all' ? `<p class="hint">Recorre todos los artículos en orden alfabético y recuerda dónde quedó. Dariopedia en español tiene ~2 millones de artículos; a esta velocidad son semanas. Para todo, usa mejor la importación del volcado de abajo.</p>`
       : '';
   };
   $('#src').onchange = renderOpt; renderOpt();
@@ -393,7 +391,7 @@ async function settings() {
     <h2>Ajustes</h2>
     <div class="card">
       <h3 style="margin-top:0">Contenido</h3>
-      <label for="lang">Idioma de la Wikipedia</label>
+      <label for="lang">Idioma</label>
       <select id="lang">${[['es', 'Español'], ['en', 'English'], ['pt', 'Português'], ['ca', 'Català'], ['gl', 'Galego'], ['eu', 'Euskara'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch']]
         .map(([c, n]) => `<option value="${c}" ${c === prefs.lang ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <label><input type="checkbox" id="autoSave" ${prefs.autoSave ? 'checked' : ''} style="width:auto"> Guardar automáticamente todo artículo que abra</label>

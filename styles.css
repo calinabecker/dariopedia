@@ -20,7 +20,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .top{position:sticky;top:0;z-index:10;display:flex;gap:16px;align-items:center;padding:8px 16px;
   background:var(--bg);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;color:var(--ink)!important;text-decoration:none!important}
-.brand img{width:36px;height:36px}
+.brand img{width:38px;height:38px;border-radius:50%;object-fit:cover;border:1px solid var(--line2)}
 .brand span{font-family:var(--serif);font-size:1.5rem;letter-spacing:.2px;line-height:1}
 .search{flex:1;min-width:0;max-width:640px;margin:0 auto}
 .search input{width:100%;padding:7px 12px;border:1px solid var(--line2);border-radius:2px;background:var(--panel);outline:0}
