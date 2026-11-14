@@ -88,7 +88,7 @@ async function home() {
       <p>La enciclopedia libre, disponible sin conexión.</p>
       <div class="stats">
         <div><b>${n.toLocaleString('es')}</b>artículos guardados</div>
-        ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>usados de ${fmtBytes(est.quota || 0)}</div>` : ''}
+        ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>ocupa en tu móvil</div><div><b>${fmtBytes(Math.max(0, (est.quota || 0) - (est.usage || 0)))}</b>de espacio disponible</div>` : ''}
       </div>
       <div class="row" style="justify-content:center;margin-top:18px">
         <button class="btn" id="rnd">🎲 Artículo aleatorio</button>
@@ -433,7 +433,7 @@ async function settings() {
     </div>
     <div class="card">
       <h3 style="margin-top:0">Almacenamiento</h3>
-      <p class="hint">${est ? `Usado: ${fmtBytes(est.usage || 0)} de ${fmtBytes(est.quota || 0)} disponibles.` : ''} ${persisted ? 'Almacenamiento persistente activado ✓' : 'El navegador podría borrar datos si falta espacio.'}</p>
+      <p class="hint">${est ? `Ocupa ${fmtBytes(est.usage || 0)}. El navegador te deja usar hasta ${fmtBytes(est.quota || 0)}.` : ''} ${persisted ? 'Almacenamiento persistente activado ✓' : 'El navegador podría borrar datos si falta espacio.'}</p>
       <div class="row">
         <button class="btn" id="persist">Pedir almacenamiento persistente</button>
         <button class="btn" id="exp">Exportar mis artículos</button>

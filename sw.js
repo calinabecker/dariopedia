@@ -1,5 +1,5 @@
 // Dariopedia service worker: app shell precache + image cache for offline use.
-const SHELL = 'dariopedia-shell-v3';
+const SHELL = 'dariopedia-shell-v4';
 const IMG = 'dariopedia-img';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'voice.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
