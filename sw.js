@@ -1,5 +1,5 @@
 // Dariopedia service worker: app shell precache + image cache for offline use.
-const SHELL = 'dariopedia-shell-v5';
+const SHELL = 'dariopedia-shell-v6';
 const IMG = 'dariopedia-img';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'voice.js',
   'manifest.webmanifest', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'];
@@ -32,6 +32,9 @@ self.addEventListener('fetch', e => {
     }));
     return;
   }
+
+  // El paquete de datos va a IndexedDB; no duplicarlo en la caché.
+  if (url.pathname.includes('/paquete/')) return;
 
   // App shell: cache first, refresh in background.
   if (url.origin === self.location.origin) {

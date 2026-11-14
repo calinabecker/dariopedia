@@ -122,3 +122,6 @@ progress{width:100%;height:10px;accent-color:var(--accent)}
 .selbtn{position:absolute;z-index:30;background:var(--accent);color:var(--accent-ink);border:0;border-radius:2px;padding:6px 12px;box-shadow:0 3px 12px #000a;cursor:pointer;font-weight:600;font-size:.88rem}
 .toast{position:fixed;left:16px;right:16px;bottom:80px;margin:auto;max-width:480px;z-index:40;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 14px;border-radius:2px;text-align:center;box-shadow:0 4px 16px #000a}
 [hidden]{display:none!important}
+
+.dl{background:var(--panel2);border-bottom:1px solid var(--line2);padding:6px 16px;font-size:.85rem;text-align:center}
+.dl progress{display:block;margin:4px auto 0;max-width:480px;height:6px}

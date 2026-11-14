@@ -173,148 +173,8 @@ function articleText(el) {
   return c.innerText;
 }
 
-/* ---------------- Bulk downloads ---------------- */
-let job = null;
-
-function downloads() {
-  view.innerHTML = `
-    <h2>Descargar Dariopedia para usar sin conexión</h2>
-    <div class="card">
-      <label for="src">¿Qué quieres descargar?</label>
-      <select id="src">
-        <option value="featured">Artículos destacados (la mejor selección)</option>
-        <option value="category">Una categoría completa</option>
-        <option value="random">Artículos al azar</option>
-        <option value="list">Lista de títulos</option>
-        <option value="all">TODO Dariopedia (muy lento, se puede pausar y reanudar)</option>
-      </select>
-      <div id="opt"></div>
-      <label for="max">Máximo de artículos en esta tanda</label>
-      <input id="max" type="number" min="1" value="500">
-      <div class="row" style="margin-top:14px">
-        <button class="btn primary" id="startDl">Empezar descarga</button>
-        <button class="btn" id="stopDl" disabled>Pausar</button>
-      </div>
-      <div id="prog" style="margin-top:14px" hidden><progress id="bar" max="100" value="0"></progress><p class="hint" id="progTxt"></p></div>
-    </div>
-    <div class="card">
-      <h3 style="margin-top:0">Paquete completo sin imágenes (recomendado)</h3>
-      <p class="hint">Todo Dariopedia en solo texto, muy comprimido. Se genera con <code>tools/crear_paquete.py</code>
-      (modo <b>resumen</b>: la introducción de cada artículo, unos pocos cientos de MB; modo <b>completo</b>: el texto entero, varios GB).
-      Impórtalo aquí: acepta varios archivos <code>.ndjson.gz</code> a la vez.</p>
-      <div class="row"><button class="btn primary" id="pkgSite">Descargar paquete de este sitio</button></div>
-      <label for="imp">…o elige los archivos del paquete</label>
-      <input type="file" id="imp" multiple accept=".json,.ndjson,.gz,.tgz,application/gzip,application/json">
-      <div id="impProg" hidden style="margin-top:10px"><progress id="impBar" max="100" value="0"></progress><p class="hint" id="impTxt"></p>
-      <button class="btn" id="impStop">Detener importación</button></div>
-    </div>`;
-  const opt = $('#opt');
-  const renderOpt = () => {
-    const v = $('#src').value;
-    opt.innerHTML = v === 'category' ? `<label for="cat">Nombre de la categoría</label><input id="cat" type="text" placeholder="Ej: Argentina, Física, Mamíferos">
-        <label><input type="checkbox" id="sub" checked style="width:auto"> Incluir subcategorías (1 nivel)</label>`
-      : v === 'list' ? `<label for="titles">Un título por línea</label><textarea id="titles" rows="6"></textarea>`
-      : v === 'all' ? `<p class="hint">Recorre todos los artículos en orden alfabético y recuerda dónde quedó. Dariopedia en español tiene ~2 millones de artículos; a esta velocidad son semanas. Para todo, usa mejor la importación del volcado de abajo.</p>`
-      : '';
-  };
-  $('#src').onchange = renderOpt; renderOpt();
-  $('#startDl').onclick = startDownload;
-  $('#stopDl').onclick = () => { if (job) job.stop = true; };
-  if (job) showJob();
-  $('#imp').onchange = e => e.target.files.length && importFiles(e.target.files);
-  $('#impStop').onclick = () => { if (importJob) importJob.stop = true; };
-  $('#pkgSite').onclick = async () => {
-    if (!navigator.onLine) return toast('Necesitas conexión para descargar el paquete.');
-    try {
-      $('#impProg').hidden = false; $('#impTxt').textContent = 'Buscando el paquete…';
-      const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
-      const files = [];
-      for (const [i, n] of m.archivos.entries()) {
-        $('#impTxt').textContent = `Descargando ${n} (${i + 1}/${m.archivos.length})…`;
-        const r = await fetch('paquete/' + n); if (!r.ok) throw new Error('HTTP ' + r.status + ' en ' + n);
-        files.push(new File([await r.blob()], n));
-        if (files.length === 3 || i === m.archivos.length - 1) { await importFiles(files.splice(0)); if (importJob === null && /Error/.test($('#impTxt').textContent)) return; }
-      }
-    } catch (e) { $('#impTxt').textContent = 'No hay paquete en este sitio o falló la descarga: ' + e.message; }
-  };
-}
-
-async function* titleSource(src, lang) {
-  if (src === 'list') { for (const t of $('#titles').value.split('\n').map(s => s.trim()).filter(Boolean)) yield t; return; }
-  if (src === 'random') { while (true) { const j = await api(lang, { action: 'query', list: 'random', rnnamespace: 0, rnlimit: 100 }); for (const r of j.query.random) yield r.title; } }
-  if (src === 'all') {
-    let cont = (await db.kvGet('allpages:' + lang)) || '';
-    while (true) {
-      const j = await api(lang, { action: 'query', list: 'allpages', apnamespace: 0, apfilterredir: 'nonredirects', aplimit: 500, ...(cont ? { apcontinue: cont } : {}) });
-      for (const p of j.query.allpages) yield p.title;
-      if (!j.continue) return;
-      cont = j.continue.apcontinue; await db.kvSet('allpages:' + lang, cont);
-    }
-  }
-  let cats;
-  if (src === 'featured') cats = [lang === 'es' ? 'Categoría:Wikipedia:Artículos destacados' : lang === 'en' ? 'Category:Featured articles' : 'Category:Featured articles'];
-  else {
-    const name = $('#cat').value.trim(); if (!name) throw new Error('Escribe una categoría');
-    cats = [/:/.test(name) ? name : (lang === 'es' ? 'Categoría:' : 'Category:') + name];
-  }
-  const withSub = src === 'category' && $('#sub').checked;
-  const seen = new Set();
-  for (let i = 0; i < cats.length; i++) {
-    let cont = {};
-    do {
-      const j = await api(lang, { action: 'query', list: 'categorymembers', cmtitle: cats[i], cmlimit: 500, cmtype: 'page|subcat', ...cont });
-      for (const m of j.query.categorymembers) {
-        if (m.ns === 14) { if (withSub && i === 0 && !seen.has(m.title)) { seen.add(m.title); cats.push(m.title); } continue; }
-        if (m.ns === 0) yield m.title;
-        else if (src === 'featured' && m.ns === 1) yield m.title.replace(/^[^:]+:/, ''); // talk pages tagged as featured
-      }
-      cont = j.continue || null;
-    } while (cont);
-  }
-}
-
-async function startDownload() {
-  if (job) return;
-  if (!navigator.onLine) return toast('Necesitas conexión para descargar.');
-  navigator.storage?.persist?.();
-  const lang = prefs.lang, src = $('#src').value, max = Math.max(1, +$('#max').value || 500);
-  job = { done: 0, claimed: 0, skipped: 0, failed: 0, max, stop: false, status: 'Buscando artículos…' };
-  showJob();
-  const it = titleSource(src, lang);
-  let running = true, buf = [];
-  const flush = async () => { if (buf.length) { const b = buf; buf = []; await db.putArticles(b); } };
-  const next = async () => { if (!running) return null; try { const r = await it.next(); if (r.done) { running = false; return null; } return r.value; } catch (e) { running = false; job.status = 'Error: ' + e.message; return null; } };
-  let pulling = Promise.resolve();
-  const getTitle = () => (pulling = pulling.then(next));
-  const worker = async () => {
-    while (!job.stop && job.claimed < max) {
-      job.claimed++;
-      const t = await getTitle(); if (t == null) return;
-      try {
-        if (await db.hasArticle(lang, t)) { job.skipped++; job.claimed--; continue; }
-        const a = await fetchArticle(lang, t);
-        buf.push(a); job.done++;
-        if (buf.length >= 10) await flush();
-        if (prefs.saveImages) cacheImages(a.html);
-      } catch { job.failed++; job.claimed--; }
-      job.status = `Descargando… último: ${t}`; showJob();
-    }
-  };
-  await Promise.all([worker(), worker(), worker()]);
-  await flush();
-  job.status = job.stop ? 'Pausado. Puedes reanudar cuando quieras.' : (job.status.startsWith('Error') ? job.status : 'Listo ✓');
-  showJob(); const j = job; job = null; showJob(j);
-}
-
-function showJob(j = job) {
-  const bar = $('#bar'); if (!bar || !j) return;
-  $('#prog').hidden = false; $('#startDl').disabled = !!job; $('#stopDl').disabled = !job;
-  bar.value = Math.min(100, (j.done / j.max) * 100);
-  $('#progTxt').textContent = `${j.done} nuevos · ${j.skipped} ya estaban · ${j.failed} fallidos — ${j.status}`;
-}
-
-/* ---------------- Import / export ---------------- */
-/** Paquete de texto plano (tools/crear_paquete.py): párrafos y "## Título" → HTML. */
+/* ---------------- Paquete sin conexión (descarga automática) ---------------- */
+/** Párrafos y "## Título" del paquete de texto → HTML. */
 function textToHtml(t) {
   return t.split('\n\n').map(p => {
     const m = p.match(/^(#{2,4}) (.*)$/);
@@ -322,54 +182,94 @@ function textToHtml(t) {
   }).join('');
 }
 
-let importJob = null;
-async function importFiles(files) {
-  if (importJob) return;
-  navigator.storage?.persist?.();
-  importJob = { stop: false };
-  $('#impProg').hidden = false;
-  const total = [...files].reduce((n, f) => n + f.size, 0);
-  let read = 0, count = 0, bad = 0, batch = [], err = '';
-  for (const file of [...files].sort((a, b) => a.name.localeCompare(b.name))) {
-    if (importJob.stop || err) break;
-    $('#impTxt').textContent = `Importando ${file.name}…`;
-    await importOne(file);
-  }
-  $('#impTxt').textContent = err || `${importJob.stop ? 'Detenido' : 'Listo ✓'} — ${count.toLocaleString('es')} artículos importados${bad ? ` (${bad} líneas ilegibles)` : ''}.`;
-  importJob = null;
-
-  async function importOne(file) {
-  const counter = new TransformStream({ transform(ch, ctl) { read += ch.byteLength; ctl.enqueue(ch); } });
-  let stream = file.stream().pipeThrough(counter);
-  if (/\.(gz|tgz)$/i.test(file.name)) stream = stream.pipeThrough(new DecompressionStream('gzip'));
-  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
-  let rest = '';
-  const handle = line => {
-    const i = line.indexOf('{'); if (i < 0) return;
-    let o; try { o = JSON.parse(line.slice(i)); } catch { bad++; return; }
-    if (o.html && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: o.html });
-    else if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: textToHtml(o.text) });
-    else if (o.article_body?.html && o.name && (o.namespace?.identifier ?? 0) === 0)
-      batch.push({ lang: o.in_language?.identifier || prefs.lang, title: o.name, html: cleanHTML(o.article_body.html, o.in_language?.identifier || prefs.lang) });
-  };
-  try {
-    while (!importJob.stop) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const lines = (rest + value).split('\n'); rest = lines.pop();
-      for (const l of lines) handle(l);
-      if (batch.length >= 100) { count += batch.length; await db.putArticles(batch); batch = [];
-        $('#impBar').value = (read / total) * 100;
-        $('#impTxt').textContent = `${count.toLocaleString('es')} artículos importados · ${file.name}`; }
-    }
-    if (!importJob.stop) handle(rest);
-    if (batch.length) { count += batch.length; await db.putArticles(batch); }
-  } catch (e) {
-    err = `Error: ${e.message}. Se importaron ${count} artículos (¿se llenó el almacenamiento?).`;
-  } finally { reader.cancel().catch(() => {}); }
-  }
+const pack = { running: false, stop: false, pct: 0, msg: '', done: 0, total: 0, error: '' };
+const dl = $('#dl');
+function paintPack() {
+  dl.hidden = !pack.running && !pack.error;
+  $('#dlTxt').textContent = pack.error || pack.msg;
+  $('#dlBar').value = pack.pct; $('#dlBar').hidden = !pack.running;
+  const st = $('#pkgState'); if (st) st.textContent = pack.error || pack.msg;
+  const bar = $('#pkgBar'); if (bar) { bar.value = pack.pct; bar.hidden = !pack.running; }
+  const go = $('#pkgGo'); if (go) { go.disabled = pack.running; go.textContent = pack.done && pack.done === pack.total ? '✓ Todo descargado' : 'Descargar todo'; }
 }
 
+async function importShard(blob, name) {
+  let stream = blob.stream().pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream());
+  const reader = stream.getReader();
+  let rest = '', batch = [], n = 0;
+  const flush = async () => { if (batch.length) { n += batch.length; await db.putArticles(batch); batch = []; } };
+  const handle = line => {
+    if (!line) return;
+    let o; try { o = JSON.parse(line); } catch { return; }
+    if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, html: textToHtml(o.text) });
+  };
+  while (!pack.stop) {
+    const { value, done } = await reader.read(); if (done) break;
+    const lines = (rest + value).split('\n'); rest = lines.pop();
+    lines.forEach(handle);
+    if (batch.length >= 200) await flush();
+  }
+  if (!pack.stop) handle(rest);
+  await flush(); reader.cancel().catch(() => {});
+  return n;
+}
+
+async function installPack() {
+  if (pack.running) return;
+  pack.running = true; pack.stop = false; pack.error = ''; pack.msg = 'Preparando la descarga…'; paintPack();
+  try {
+    navigator.storage?.persist?.();
+    const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
+    let st = (await db.kvGet('pack')) || {};
+    if (st.id !== m.articulos + ':' + m.archivos.length) st = { id: m.articulos + ':' + m.archivos.length, done: [] };
+    pack.total = m.archivos.length; pack.done = st.done.length;
+    for (const [i, name] of m.archivos.entries()) {
+      if (st.done.includes(name)) continue;
+      if (pack.stop) break;
+      pack.pct = (i / m.archivos.length) * 100;
+      pack.msg = `Descargando Dariopedia sin conexión… ${Math.round(pack.pct)} % (no cierres la app)`; paintPack();
+      const r = await fetch('paquete/' + name, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      await importShard(await r.blob(), name);
+      if (pack.stop) break;
+      st.done.push(name); pack.done = st.done.length; await db.kvSet('pack', st);
+    }
+    pack.pct = 100;
+    pack.msg = pack.stop ? 'Descarga en pausa.' : `Listo ✓ ${(await db.countArticles()).toLocaleString('es')} artículos disponibles sin conexión.`;
+  } catch (e) {
+    pack.error = /quota|storage/i.test(e.message) ? 'No hay espacio suficiente en el móvil.' : 'La descarga se ha interrumpido (' + e.message + '). Se reanuda sola al volver a abrir la app con conexión.';
+  }
+  pack.running = false; paintPack();
+  if (location.hash.length < 3 || location.hash === '#/descargas') route();
+if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+}
+
+async function packIsComplete() {
+  try {
+    const m = await (await fetch('paquete/manifest.json', { cache: 'no-store' })).json();
+    const st = (await db.kvGet('pack')) || {};
+    return st.id === m.articulos + ':' + m.archivos.length && st.done?.length === m.archivos.length;
+  } catch { return true; } // sin conexión o sin paquete: no insistir
+}
+
+function downloads() {
+  view.innerHTML = `
+    <h2>Descargas</h2>
+    <div class="card">
+      <h3 style="margin-top:0">Dariopedia sin conexión</h3>
+      <p class="hint">Todos los artículos en solo texto, sin imágenes. Se descargan solos la primera vez que abres la app
+      con conexión; si se interrumpe, continúa donde se quedó.</p>
+      <progress id="pkgBar" max="100" value="0" hidden></progress>
+      <p id="pkgState" class="hint"></p>
+      <div class="row"><button class="btn primary" id="pkgGo">Descargar todo</button><button class="btn" id="pkgStop">Pausar</button></div>
+    </div>`;
+  $('#pkgGo').onclick = () => { if (!navigator.onLine) return toast('Necesitas conexión para descargar.'); installPack(); };
+  $('#pkgStop').onclick = () => { pack.stop = true; };
+  packIsComplete().then(ok => { if (ok && !pack.running) { pack.msg = 'Todo descargado: ya puedes usar Dariopedia sin conexión.'; pack.done = pack.total = 1; } paintPack(); });
+  paintPack();
+}
+
+/* ---------------- Exportar ---------------- */
 async function exportAll() {
   const titles = [];
   for await (const t of db.allTitles()) titles.push(t);
@@ -492,6 +392,7 @@ selBtn.onclick = () => { readText(getSelection().toString(), prefs.lang); selBtn
 function go(hash, replace) {
   if (replace) { history.replaceState(null, '', hash); return route(); }
   if (location.hash === hash) return route();
+if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
   location.hash = hash; // triggers route() via hashchange
 }
 async function route() {
@@ -517,3 +418,4 @@ addEventListener('online', net); addEventListener('offline', net); net();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 await voice.loadSettings();
 route();
+if (navigator.onLine) packIsComplete().then(ok => { if (!ok) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });

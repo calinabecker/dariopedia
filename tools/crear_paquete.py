@@ -139,11 +139,33 @@ def paginas(f, modo, maximo, minimo, lang, desamb):
             el.clear()
 
 
-def abrir(origen):
+def descargar(url, destino, intentos=50):
+    """Descarga con reanudación (Range) y reintentos: el servidor corta conexiones largas."""
+    with urllib.request.urlopen(urllib.request.Request(url, headers={'Range': 'bytes=0-0', 'User-Agent': 'Dariopedia-paquete/1.0'})) as r:
+        total = int(r.headers['Content-Range'].rsplit('/', 1)[1])
+    for n in range(intentos):
+        tam = os.path.getsize(destino) if os.path.exists(destino) else 0
+        if tam >= total: return
+        try:
+            req = urllib.request.Request(url, headers={'Range': f'bytes={tam}-', 'User-Agent': 'Dariopedia-paquete/1.0'})
+            with urllib.request.urlopen(req, timeout=60) as r, open(destino, 'ab') as f:
+                while True:
+                    bloque = r.read(1 << 20)
+                    if not bloque: break
+                    f.write(bloque)
+                    print(f'\rDescargando volcado: {os.path.getsize(destino)/total*100:5.1f} %', end='', file=sys.stderr)
+        except Exception as e:
+            print(f'\nConexión interrumpida ({e}); reintentando…', file=sys.stderr); time.sleep(3)
+    if os.path.getsize(destino) < total: sys.exit('No se pudo descargar el volcado completo.')
+
+
+def abrir(origen, carpeta):
     if os.path.exists(origen):
         return bz2.open(origen, 'rb')
-    resp = urllib.request.urlopen(urllib.request.Request(origen, headers={'User-Agent': 'Dariopedia-paquete/1.0'}))
-    return bz2.open(resp, 'rb')
+    destino = os.path.abspath(carpeta).rstrip('/') + '.volcado.xml.bz2'  # fuera de la carpeta del paquete
+    descargar(origen, destino)
+    print('\nVolcado descargado; procesando…', file=sys.stderr)
+    return bz2.open(destino, 'rb')
 
 
 def main():
@@ -176,7 +198,7 @@ def main():
         f = gzip.open(os.path.join(a.salida, nombre), 'wt', encoding='utf-8', compresslevel=9)
 
     nuevo()
-    src = abrir(origen)
+    src = abrir(origen, a.salida)
     gen = paginas(src, a.modo, a.max_caracteres, a.min_caracteres, a.idioma, a.con_desambiguaciones)
     try:
         with mp.Pool(a.procesos) as pool:
