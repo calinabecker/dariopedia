@@ -73,7 +73,7 @@ async function clonedChunk(text) {
   const key = await sha(settings.voiceId + '|' + text);
   let blob = await audioGet(key);
   if (blob) return blob;
-  if (!navigator.onLine) throw new Error('Sin conexión: la voz clonada solo puede generar audio nuevo con internet (lo ya escuchado sí funciona offline).');
+  if (!navigator.onLine) throw new Error('Sin conexión: la voz clonada solo puede generar audio nuevo con internet (lo que ya has escuchado sí funciona sin conexión).');
   const r = await fetch(`${EL}/text-to-speech/${settings.voiceId}`, {
     method: 'POST',
     headers: { 'xi-api-key': settings.apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },

@@ -22,7 +22,7 @@ async function api(lang, params, tries = 4) {
   for (let i = 0; ; i++) {
     const r = await fetch(u);
     if (r.ok) { const j = await r.json(); if (j.error?.code !== 'maxlag' || i >= tries) return j; }
-    else if (!(r.status === 429 || r.status >= 500) || i >= tries) throw new Error(r.status === 429 ? 'Wikipedia está limitando las solicitudes (429), probá en un rato' : 'HTTP ' + r.status);
+    else if (!(r.status === 429 || r.status >= 500) || i >= tries) throw new Error(r.status === 429 ? 'Wikipedia está limitando las solicitudes (429), prueba en un rato' : 'HTTP ' + r.status);
     const wait = (+r.headers.get('retry-after') || 2 ** i) * 1000;
     await new Promise(res => setTimeout(res, Math.min(wait, 30000)));
   }
@@ -85,19 +85,19 @@ async function home() {
   view.innerHTML = `
     <section class="hero">
       <h1>Dariopedia</h1>
-      <p>La enciclopedia libre, en tu bolsillo y sin conexión.</p>
+      <p>La enciclopedia libre, disponible sin conexión.</p>
       <div class="stats">
         <div><b>${n.toLocaleString('es')}</b>artículos guardados</div>
         ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>usados de ${fmtBytes(est.quota || 0)}</div>` : ''}
       </div>
       <div class="row" style="justify-content:center;margin-top:18px">
-        <button class="btn" id="rnd">🎲 Artículo al azar</button>
+        <button class="btn" id="rnd">🎲 Artículo aleatorio</button>
         <a class="btn primary" href="#/descargas">⬇︎ Descargar artículos</a>
       </div>
     </section>
     <section class="card"><h2 style="margin-top:0">Guardados recientemente</h2>
       ${recent.length ? `<ul class="list">${recent.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge">${r.lang}</span></li>`).join('')}</ul>`
-        : `<p class="empty">Todavía no hay artículos offline. Buscá algo o andá a <a href="#/descargas">Descargas</a>.</p>`}
+        : `<p class="empty">Todavía no hay artículos sin conexión. Busca algo o ve a <a href="#/descargas">Descargas</a>.</p>`}
     </section>`;
   $('#rnd').onclick = async () => {
     if (navigator.onLine) {
@@ -114,8 +114,8 @@ async function search(q) {
   const local = await db.searchLocal(q, prefs.lang);
   const exact = local.find(r => db.norm(r.title) === db.norm(q));
   $('#loc').innerHTML = `<h3 style="margin-top:0">Sin conexión (${local.length})</h3>` + (local.length
-    ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge ok">offline</span></li>`).join('')}</ul>`
-    : '<p class="hint">Nada guardado con ese título.</p>');
+    ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge ok">sin conexión</span></li>`).join('')}</ul>`
+    : '<p class="hint">No hay nada guardado con ese título.</p>');
   if (!navigator.onLine) return;
   $('#onl').innerHTML = '<div class="card"><p class="hint">Buscando en Wikipedia…</p></div>';
   try {
@@ -123,9 +123,9 @@ async function search(q) {
     const hits = j.query.search;
     const have = await Promise.all(hits.map(h => db.hasArticle(prefs.lang, h.title)));
     $('#onl').innerHTML = `<div class="card"><h3 style="margin-top:0">En Wikipedia (${hits.length})</h3><ul class="list">${hits.map((h, i) =>
-      `<li><a href="${articleHref(prefs.lang, h.title)}">${esc(h.title)}</a>${have[i] ? '<span class="badge ok">offline</span>' : ''}<small>${h.snippet.replace(/<(?!\/?span)[^>]+>/g, '')}…</small></li>`).join('')}</ul></div>`;
+      `<li><a href="${articleHref(prefs.lang, h.title)}">${esc(h.title)}</a>${have[i] ? '<span class="badge ok">sin conexión</span>' : ''}<small>${h.snippet.replace(/<(?!\/?span)[^>]+>/g, '')}…</small></li>`).join('')}</ul></div>`;
     if (!exact && hits[0] && db.norm(hits[0].title) === db.norm(q)) go(articleHref(prefs.lang, hits[0].title), true);
-  } catch (e) { $('#onl').innerHTML = `<div class="card"><p class="hint">No se pudo buscar en Wikipedia: ${esc(e.message)}</p></div>`; }
+  } catch (e) { $('#onl').innerHTML = `<div class="card"><p class="hint">No se ha podido buscar en Wikipedia: ${esc(e.message)}</p></div>`; }
 }
 
 async function article(lang, title) {
@@ -134,7 +134,7 @@ async function article(lang, title) {
   if (!html) {
     if (!navigator.onLine) {
       view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>Este artículo no está guardado y no hay conexión.</p>
-        <p><a href="#/s/${encodeURIComponent(title)}">Buscar títulos parecidos offline</a></p></div>`;
+        <p><a href="#/s/${encodeURIComponent(title)}">Buscar títulos parecidos sin conexión</a></p></div>`;
       return;
     }
     try {
@@ -143,7 +143,7 @@ async function article(lang, title) {
       if (a.title !== title.replace(/_/g, ' ')) history.replaceState(null, '', articleHref(lang, a.title));
       if (prefs.autoSave) { await db.putArticle(a); saved = true; cacheImages(html); }
     } catch (e) {
-      view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>No se pudo cargar: ${esc(e.message)}</p></div>`; return;
+      view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>No se ha podido cargar: ${esc(e.message)}</p></div>`; return;
     }
   }
   document.title = `${shownTitle} — Dariopedia`;
@@ -152,12 +152,12 @@ async function article(lang, title) {
       <h1 class="title">${esc(shownTitle)}</h1>
       <div class="toolbar">
         <button class="btn" id="readAll">🔊 Leer artículo</button>
-        <button class="btn" id="saveBtn">${saved ? '✓ Guardado offline' : '⬇︎ Guardar offline'}</button>
+        <button class="btn" id="saveBtn">${saved ? '✓ Guardado sin conexión' : '⬇︎ Guardar sin conexión'}</button>
         ${saved ? '<button class="btn danger" id="delBtn">Eliminar</button>' : ''}
         <a class="btn" href="https://${lang}.wikipedia.org/wiki/${encodeURIComponent(shownTitle.replace(/ /g, '_'))}" target="_blank" rel="noopener">Ver original ↗</a>
       </div>
       <div id="body">${html}</div>
-      <p class="hint" style="margin-top:30px">Contenido de Wikipedia, bajo licencia CC BY-SA 4.0.</p>
+      <p class="attrib">Texto procedente de la Wikipedia, disponible bajo la licencia Creative Commons Atribución-CompartirIgual 4.0.</p>
     </article>`;
   $('#saveBtn').onclick = async () => {
     if (saved) return;
@@ -181,7 +181,7 @@ function downloads() {
   view.innerHTML = `
     <h2>Descargar Wikipedia para usar sin conexión</h2>
     <div class="card">
-      <label for="src">¿Qué querés descargar?</label>
+      <label for="src">¿Qué quieres descargar?</label>
       <select id="src">
         <option value="featured">Artículos destacados (la mejor selección)</option>
         <option value="category">Una categoría completa</option>
@@ -200,7 +200,7 @@ function downloads() {
     </div>
     <div class="card">
       <h3 style="margin-top:0">Importar un volcado completo (recomendado para “todo”)</h3>
-      <p class="hint">Para tener <b>toda</b> la Wikipedia, lo más rápido es bajar el volcado oficial HTML de Wikimedia
+      <p class="hint">Para tener <b>toda</b> la Wikipedia, lo más rápido es descargar el volcado oficial HTML de Wikimedia
       (<a href="https://dumps.wikimedia.org/other/enterprise_html/runs/" target="_blank" rel="noopener">dumps.wikimedia.org → enterprise_html</a>,
       archivo <code>${prefs.lang}wiki-NS0-…-ENTERPRISE-HTML.json.tar.gz</code>) e importarlo acá. También acepta paquetes exportados desde Dariopedia (.ndjson / .ndjson.gz).</p>
       <input type="file" id="imp" accept=".json,.ndjson,.gz,.tgz,application/gzip,application/json">
@@ -213,7 +213,7 @@ function downloads() {
     opt.innerHTML = v === 'category' ? `<label for="cat">Nombre de la categoría</label><input id="cat" type="text" placeholder="Ej: Argentina, Física, Mamíferos">
         <label><input type="checkbox" id="sub" checked style="width:auto"> Incluir subcategorías (1 nivel)</label>`
       : v === 'list' ? `<label for="titles">Un título por línea</label><textarea id="titles" rows="6"></textarea>`
-      : v === 'all' ? `<p class="hint">Recorre todos los artículos en orden alfabético y recuerda dónde quedó. La Wikipedia en español tiene ~2 millones de artículos; a esta velocidad son semanas. Para todo, usá mejor la importación del volcado de abajo.</p>`
+      : v === 'all' ? `<p class="hint">Recorre todos los artículos en orden alfabético y recuerda dónde quedó. La Wikipedia en español tiene ~2 millones de artículos; a esta velocidad son semanas. Para todo, usa mejor la importación del volcado de abajo.</p>`
       : '';
   };
   $('#src').onchange = renderOpt; renderOpt();
@@ -239,7 +239,7 @@ async function* titleSource(src, lang) {
   let cats;
   if (src === 'featured') cats = [lang === 'es' ? 'Categoría:Wikipedia:Artículos destacados' : lang === 'en' ? 'Category:Featured articles' : 'Category:Featured articles'];
   else {
-    const name = $('#cat').value.trim(); if (!name) throw new Error('Escribí una categoría');
+    const name = $('#cat').value.trim(); if (!name) throw new Error('Escribe una categoría');
     cats = [/:/.test(name) ? name : (lang === 'es' ? 'Categoría:' : 'Category:') + name];
   }
   const withSub = src === 'category' && $('#sub').checked;
@@ -260,7 +260,7 @@ async function* titleSource(src, lang) {
 
 async function startDownload() {
   if (job) return;
-  if (!navigator.onLine) return toast('Necesitás conexión para descargar.');
+  if (!navigator.onLine) return toast('Necesitas conexión para descargar.');
   navigator.storage?.persist?.();
   const lang = prefs.lang, src = $('#src').value, max = Math.max(1, +$('#max').value || 500);
   job = { done: 0, claimed: 0, skipped: 0, failed: 0, max, stop: false, status: 'Buscando artículos…' };
@@ -287,7 +287,7 @@ async function startDownload() {
   };
   await Promise.all([worker(), worker(), worker()]);
   await flush();
-  job.status = job.stop ? 'Pausado. Podés reanudar cuando quieras.' : (job.status.startsWith('Error') ? job.status : 'Listo ✓');
+  job.status = job.stop ? 'Pausado. Puedes reanudar cuando quieras.' : (job.status.startsWith('Error') ? job.status : 'Listo ✓');
   showJob(); const j = job; job = null; showJob(j);
 }
 
@@ -357,37 +357,37 @@ async function settings() {
     <h2>Ajustes</h2>
     <div class="card">
       <h3 style="margin-top:0">Contenido</h3>
-      <label for="lang">Idioma de Wikipedia</label>
+      <label for="lang">Idioma de la Wikipedia</label>
       <select id="lang">${[['es', 'Español'], ['en', 'English'], ['pt', 'Português'], ['ca', 'Català'], ['gl', 'Galego'], ['eu', 'Euskara'], ['fr', 'Français'], ['it', 'Italiano'], ['de', 'Deutsch']]
         .map(([c, n]) => `<option value="${c}" ${c === prefs.lang ? 'selected' : ''}>${n}</option>`).join('')}</select>
-      <label><input type="checkbox" id="autoSave" ${prefs.autoSave ? 'checked' : ''} style="width:auto"> Guardar automáticamente todo artículo que abro</label>
+      <label><input type="checkbox" id="autoSave" ${prefs.autoSave ? 'checked' : ''} style="width:auto"> Guardar automáticamente todo artículo que abra</label>
       <label><input type="checkbox" id="saveImages" ${prefs.saveImages ? 'checked' : ''} style="width:auto"> Guardar también las imágenes (ocupa más espacio)</label>
     </div>
     <div class="card">
       <h3 style="margin-top:0">Voz de lectura</h3>
       <label for="engine">Motor</label>
       <select id="engine">
-        <option value="sistema" ${vs.engine === 'sistema' ? 'selected' : ''}>Voz del dispositivo (funciona 100% offline)</option>
-        <option value="clonada" ${vs.engine === 'clonada' ? 'selected' : ''} ${vs.voiceId ? '' : 'disabled'}>Voz clonada${vs.voiceName ? `: ${esc(vs.voiceName)}` : ' (creala abajo)'}</option>
+        <option value="sistema" ${vs.engine === 'sistema' ? 'selected' : ''}>Voz del dispositivo (funciona 100 % sin conexión)</option>
+        <option value="clonada" ${vs.engine === 'clonada' ? 'selected' : ''} ${vs.voiceId ? '' : 'disabled'}>Voz clonada${vs.voiceName ? `: ${esc(vs.voiceName)}` : ' (créala abajo)'}</option>
       </select>
       <label for="sysVoice">Voz del dispositivo</label>
-      <select id="sysVoice">${voices.map(v => `<option value="${esc(v.voiceURI)}" ${v.voiceURI === vs.systemVoice ? 'selected' : ''}>${esc(v.name)} (${v.lang})${v.localService ? ' · offline' : ''}</option>`).join('') || '<option>No hay voces disponibles</option>'}</select>
+      <select id="sysVoice">${voices.map(v => `<option value="${esc(v.voiceURI)}" ${v.voiceURI === vs.systemVoice ? 'selected' : ''}>${esc(v.name)} (${v.lang})${v.localService ? ' · sin conexión' : ''}</option>`).join('') || '<option>No hay voces disponibles</option>'}</select>
       <label for="rate">Velocidad: <span id="rateV">${vs.rate}</span>×</label>
       <input id="rate" type="range" min="0.6" max="1.8" step="0.1" value="${vs.rate}" style="width:100%">
       <div class="row" style="margin-top:10px"><button class="btn" id="testVoice">▶ Probar voz</button></div>
 
       <h4>Clonar una voz desde un audio</h4>
-      <p class="hint">Subí una grabación clara de la voz (1–3 minutos, sin música ni ruido). Se crea una copia de esa voz con
+      <p class="hint">Sube una grabación clara de la voz (1–3 minutos, sin música ni ruido). Se crea una copia de esa voz con
       <a href="https://elevenlabs.io" target="_blank" rel="noopener">ElevenLabs</a> (necesitás una cuenta y su clave de API).
       Generar audio nuevo requiere internet; lo que ya se escuchó queda guardado y se reproduce sin conexión.
-      <b>Usá solo voces propias o de personas que te dieron permiso.</b></p>
+      <b>Usa solo voces propias o de personas que te dieron permiso.</b></p>
       <label for="apiKey">Clave de API de ElevenLabs</label>
       <input id="apiKey" type="password" value="${esc(vs.apiKey)}" placeholder="sk_…" autocomplete="off">
       <label for="vName">Nombre de la voz</label>
-      <input id="vName" type="text" value="${esc(vs.voiceName || 'Darío')}">
+      <input id="vName" type="text" value="${esc(vs.voiceName || 'Dariopedia')}">
       <label for="vFile">Audio de muestra</label>
       <input id="vFile" type="file" accept="audio/*">
-      <label for="vId">…o, si ya la tenés creada, el ID de la voz</label>
+      <label for="vId">…o, si ya la tienes creada, el ID de la voz</label>
       <input id="vId" type="text" value="${esc(vs.voiceId)}" placeholder="voice_id">
       <div class="row" style="margin-top:10px">
         <button class="btn primary" id="cloneBtn">Crear / guardar voz</button>
@@ -418,12 +418,12 @@ async function settings() {
     try {
       if (file) { msg.textContent = 'Subiendo el audio y creando la voz…'; await voice.cloneVoice(file, name, apiKey); }
       else if (id) await voice.saveSettings({ apiKey, voiceId: id, voiceName: name, engine: 'clonada' });
-      else return (msg.textContent = 'Elegí un audio de muestra o pegá un ID de voz.');
+      else return (msg.textContent = 'Elige un audio de muestra o pega un ID de voz.');
       msg.textContent = '¡Voz lista! Ya se usa para leer.'; setTimeout(settings, 1200);
     } catch (e) { msg.textContent = 'Error: ' + e.message; }
   };
   $('#clrAudio').onclick = async () => { await db.audioClear(); toast('Audios borrados'); };
-  $('#persist').onclick = async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Almacenamiento persistente activado' : 'El navegador no lo concedió (instalá la app primero)'); settings(); };
+  $('#persist').onclick = async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Almacenamiento persistente activado' : 'El navegador no lo concedió (instala la app primero)'); settings(); };
   $('#exp').onclick = () => { toast('Preparando exportación…'); exportAll(); };
   $('#wipe').onclick = async () => { if (confirm('¿Borrar todos los artículos guardados?')) { await db.clearAll(); toast('Borrado'); settings(); } };
 }
