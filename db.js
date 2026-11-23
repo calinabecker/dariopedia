@@ -69,11 +69,28 @@ export async function putArticles(list, prefix = 'p') {
 }
 export const putArticle = a => putArticles([a], 'u');
 
+/** Redirecciones: [{lang, title, to}] — "Gato" → "Felis silvestris catus". Solo ocupan una entrada en "titles". */
+export async function putAliases(list) {
+  const db = await openDB();
+  const tx = db.transaction('titles', 'readwrite'), T = tx.objectStore('titles');
+  for (const a of list) T.put({ key: keyOf(a.lang, a.title), lang: a.lang, title: a.title.replace(/_/g, ' '), norm: norm(a.title), r: a.to.replace(/_/g, ' ') });
+  return done(tx);
+}
+
+/** Título real de un artículo (resuelve alias). null si no está guardado. */
+export async function resolveTitle(lang, title) {
+  const db = await openDB();
+  let t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, title)));
+  for (let i = 0; t && t.r && i < 3; i++) t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, t.r)));
+  return t && !t.r ? t.title : null;
+}
+
 const cache = { id: null, items: null };
 export async function getArticle(lang, title) {
   const db = await openDB();
-  const t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, title)));
-  if (!t) return null;
+  let t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, title)));
+  for (let i = 0; t && t.r && i < 3; i++) t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, t.r)));
+  if (!t || t.r) return null;
   if (cache.id !== t.c) {
     const rec = await req(db.transaction('articles').objectStore('articles').get(t.c));
     if (!rec) return null;
@@ -104,14 +121,26 @@ export async function countArticles() {
   return req(db.transaction('titles').objectStore('titles').count());
 }
 
-/** Búsqueda sin conexión: por prefijo (índice) y, si faltan resultados, por coincidencia parcial acotada. */
+/** Puntuación: menor = más relevante (coincidencia exacta, sin paréntesis, título corto). */
+function score(v, n) {
+  if (v.norm === n) return 0;
+  let s = 100 + (v.norm.length - n.length);
+  if (v.norm.includes('(')) s += 300;           // "Gato (danza)" detrás de "Gato"
+  if (v.norm.startsWith(n + ' ')) s -= 40;       // palabra completa antes que prefijo parcial
+  if (!v.r) s -= 5;                              // el artículo real, antes que un alias
+  return s;
+}
+
+/** Búsqueda sin conexión: exacta, por prefijo (índice) y, si faltan, coincidencia parcial; ordenada por relevancia. */
 export async function searchLocal(q, lang, limit = 30) {
   const n = norm(q); if (!n) return [];
   const db = await openDB();
   const out = new Map();
+  const exact = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, q.trim())));
+  if (exact) out.set(exact.key, exact);
   await new Promise(res => {
-    const c = db.transaction('titles').objectStore('titles').index('norm').openCursor(IDBKeyRange.bound(n, n + '￿'));
-    c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit) return res();
+    const c = db.transaction('titles').objectStore('titles').index('norm').openCursor(IDBKeyRange.bound(n, n + '\uffff'));
+    c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= 4000) return res();
       if (cur.value.lang === lang) out.set(cur.value.key, cur.value); cur.continue(); };
     c.onerror = res;
   });
@@ -119,12 +148,12 @@ export async function searchLocal(q, lang, limit = 30) {
     let scanned = 0;
     await new Promise(res => {
       const c = db.transaction('titles').objectStore('titles').index('norm').openCursor();
-      c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit || ++scanned > 300000) return res();
+      c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit * 3 || ++scanned > 300000) return res();
         const v = cur.value; if (v.lang === lang && v.norm.includes(n)) out.set(v.key, v); cur.continue(); };
       c.onerror = res;
     });
   }
-  return [...out.values()];
+  return [...out.values()].sort((x, y) => score(x, n) - score(y, n) || x.norm.localeCompare(y.norm)).slice(0, limit);
 }
 
 /** Artículos abiertos o guardados a mano (los últimos). Lista pequeña en kv. */

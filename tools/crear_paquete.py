@@ -126,16 +126,18 @@ def procesar(args):
     return {'title': titulo, 'text': texto}
 
 
-def paginas(f, modo, maximo, minimo, lang, desamb):
-    titulo, ns, wt, vacio = None, None, None, False
+def paginas(f, modo, maximo, minimo, lang, desamb, solo_redir=False):
+    titulo, ns, wt, redir = None, None, None, None
     for ev, el in ET.iterparse(f, events=('end',)):
         tag = el.tag.rsplit('}', 1)[-1]
         if tag == 'title': titulo = el.text
         elif tag == 'ns': ns = el.text
         elif tag == 'text': wt = el.text or ''
+        elif tag == 'redirect': redir = el.get('title')
         elif tag == 'page':
-            if ns == '0' and titulo and wt: yield (titulo, wt, modo, maximo, minimo, lang, desamb)
-            titulo = ns = wt = None
+            if ns == '0' and titulo and redir and solo_redir: yield (titulo, redir)
+            elif ns == '0' and titulo and wt and not solo_redir: yield (titulo, wt, modo, maximo, minimo, lang, desamb)
+            titulo = ns = wt = redir = None
             el.clear()
 
 
@@ -168,6 +170,33 @@ def abrir(origen, carpeta):
     return bz2.open(destino, 'rb')
 
 
+def redirecciones(a, origen):
+    """Alias: {"title": "Gato", "to": "Felis silvestris catus"}. Se añaden al manifest existente."""
+    src = abrir(origen, a.salida)
+    nombres, f, n, en_arch, t0 = [], None, 0, 0, time.time()
+    def nuevo():
+        nonlocal f, en_arch
+        if f: f.close()
+        nombre = f'dariopedia-{a.idioma}-redirecciones-{len(nombres)+1:04d}.ndjson.gz'; nombres.append(nombre); en_arch = 0
+        f = gzip.open(os.path.join(a.salida, nombre), 'wt', encoding='utf-8', compresslevel=9)
+    nuevo()
+    try:
+        for tit, dest in paginas(src, 'resumen', 0, 0, a.idioma, True, solo_redir=True):
+            dest = dest.split('#')[0].strip()
+            if not dest or dest == tit or ':' in dest[:12]: continue   # secciones, espacios de nombres
+            if en_arch >= 500000: nuevo()
+            f.write(json.dumps({'lang': a.idioma, 'title': tit, 'to': dest}, ensure_ascii=False) + '\n'); en_arch += 1; n += 1
+            if n % 50000 == 0: print(f'\r{n:,} redirecciones · {time.time()-t0:,.0f} s', end='', file=sys.stderr)
+    except (EOFError, ET.ParseError, OSError) as e:
+        print(f'\nAviso: {e}', file=sys.stderr)
+    f.close()
+    ruta = os.path.join(a.salida, 'manifest.json')
+    m = json.load(open(ruta)) if os.path.exists(ruta) else {'idioma': a.idioma, 'archivos': []}
+    m['redirecciones'] = nombres; m['n_redirecciones'] = n
+    json.dump(m, open(ruta, 'w'), ensure_ascii=False, indent=1)
+    print(f'\nListo: {n:,} redirecciones en {len(nombres)} archivo(s).', file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--idioma', default='es')
@@ -179,6 +208,7 @@ def main():
     ap.add_argument('--por-archivo', type=int, default=100000, help='artículos por archivo')
     ap.add_argument('--limite', type=int, default=0, help='parar tras N artículos (pruebas)')
     ap.add_argument('--con-desambiguaciones', action='store_true')
+    ap.add_argument('--solo-redirecciones', action='store_true', help='genera solo las redirecciones (Gato → Felis silvestris catus)')
     ap.add_argument('--procesos', type=int, default=os.cpu_count() or 2)
     a = ap.parse_args()
 
@@ -186,6 +216,8 @@ def main():
     os.makedirs(a.salida, exist_ok=True)
     print(f'Origen: {origen}\nModo: {a.modo} · procesos: {a.procesos}', file=sys.stderr)
 
+    if a.solo_redirecciones:
+        return redirecciones(a, origen)
     n_arch, n_art, en_arch, bytes_txt, f = 0, 0, 0, 0, None
     t0 = time.time(); nombres = []
 

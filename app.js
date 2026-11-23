@@ -114,7 +114,7 @@ async function search(q) {
   const local = await db.searchLocal(q, prefs.lang);
   const exact = local.find(r => db.norm(r.title) === db.norm(q));
   $('#loc').innerHTML = `<h3 style="margin-top:0">Sin conexión (${local.length})</h3>` + (local.length
-    ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge ok">sin conexión</span></li>`).join('')}</ul>`
+    ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a>${r.r ? ` <span class="hint">→ ${esc(r.r)}</span>` : ''}<span class="badge ok">sin conexión</span></li>`).join('')}</ul>`
     : '<p class="hint">No hay nada guardado con ese título.</p>');
   if (!navigator.onLine) return;
   $('#onl').innerHTML = '<div class="card"><p class="hint">Buscando en línea…</p></div>';
@@ -131,6 +131,7 @@ async function search(q) {
 async function article(lang, title) {
   view.innerHTML = '<p class="empty">Cargando…</p>';
   let html = await db.getArticle(lang, title), saved = !!html, shownTitle = title;
+  if (html) shownTitle = (await db.resolveTitle(lang, title)) || title;
   if (!html) {
     if (!navigator.onLine) {
       view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>Este artículo no está guardado y no hay conexión.</p>
@@ -194,15 +195,16 @@ function paintPack() {
   const go = $('#pkgGo'); if (go) { go.disabled = pack.running || pack.complete; go.textContent = pack.complete ? '✓ Todo descargado' : 'Descargar todo'; }
 }
 
-async function importShard(body, lowMem, onProgress) {
+async function importShard(body, lowMem, aliases, onProgress) {
   const reader = body.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
   const size = lowMem ? 256 : 1024;
   let rest = '', batch = [], n = 0;
-  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await db.putArticles(b); onProgress?.(n); await new Promise(r => setTimeout(r)); } };
+  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await (aliases ? db.putAliases(b) : db.putArticles(b)); onProgress?.(n); await new Promise(r => setTimeout(r)); } };
   const handle = line => {
     if (!line) return;
     let o; try { o = JSON.parse(line); } catch { return; }
-    if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, text: o.text });
+    if (aliases) { if (o.title && o.to) batch.push({ lang: o.lang || prefs.lang, title: o.title, to: o.to }); }
+    else if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, text: o.text });
   };
   while (!pack.stop) {
     const { value, done } = await reader.read(); if (done) break;
@@ -228,19 +230,21 @@ async function installPack() {
     if (st.busy) st.crashes = (st.crashes || 0) + 1;
     const lowMem = (st.crashes || 0) > 0;
     st.busy = true; await db.kvSet('pack', st);
-    pack.total = m.archivos.length; pack.done = st.done.length;
-    for (const [i, name] of m.archivos.entries()) {
+    const nombres = [...m.archivos, ...(m.redirecciones || [])];
+    pack.total = nombres.length; pack.done = st.done.length;
+    for (const [i, name] of nombres.entries()) {
       if (st.done.includes(name)) continue;
       if (pack.stop) break;
-      pack.pct = (i / m.archivos.length) * 100;
+      const esAlias = i >= m.archivos.length;
+      pack.pct = (i / nombres.length) * 100;
       pack.msg = `Descargando… ${Math.floor(pack.pct)} % (no cierres la app)`; paintPack();
       const r = await fetch('paquete/' + name, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const t0 = Date.now(), perShard = m.articulos / m.archivos.length;
-      await importShard(r.body, lowMem, n => {
-        pack.pct = ((i + Math.min(n / perShard, 1)) / m.archivos.length) * 100;
+      const t0 = Date.now(), perShard = esAlias ? 500000 : m.articulos / m.archivos.length;
+      await importShard(r.body, lowMem, esAlias, n => {
+        pack.pct = ((i + Math.min(n / perShard, 1)) / nombres.length) * 100;
         const rate = n / ((Date.now() - t0) / 1000);
-        const left = Math.round(((m.archivos.length - i - 1) * perShard + (perShard - n)) / Math.max(rate, 1) / 60);
+        const left = Math.round(((nombres.length - i - 1) * perShard + (perShard - n)) / Math.max(rate, 1) / 60);
         pack.msg = `Descargando… ${Math.floor(pack.pct)} % · quedan ~${left} min (no cierres la app)`; paintPack();
       });
       if (pack.stop) break;
@@ -273,7 +277,8 @@ async function packPending(auto) {
   const m = await getManifest(); if (!m) return false;
   const st = (await db.kvGet('pack')) || {};
   if (auto && (st.crashes || 0) >= 3 && st.busy) { pack.error = 'La descarga se ha cerrado varias veces. Pulsa «Descargar todo» en Descargas para continuar.'; return false; }
-  const ok = st.id === m.articulos + ':' + m.archivos.length && st.done?.length === m.archivos.length;
+  const total = m.archivos.length + (m.redirecciones || []).length;
+  const ok = st.id === m.articulos + ':' + m.archivos.length && st.done?.length === total;
   pack.complete = ok; return !ok;
 }
 
