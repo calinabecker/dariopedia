@@ -1,19 +1,24 @@
-// IndexedDB storage for Dariopedia. Articles are stored gzip-compressed when supported.
+// Almacenamiento en IndexedDB.
+// Los artículos se guardan en BLOQUES de ~64 comprimidos juntos (mucho más rápido y compacto
+// que uno a uno). La tabla "titles" apunta a cada artículo: { key, title, norm, c: bloque, i: posición }.
 const DB_NAME = 'dariopedia';
+const CHUNK = 64;
 let dbp;
 
 export function openDB() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB_NAME, 1);
-    r.onupgradeneeded = () => {
-      const db = r.result;
-      db.createObjectStore('articles', { keyPath: 'key' });
-      const t = db.createObjectStore('titles', { keyPath: 'key' });
-      t.createIndex('norm', 'norm');
-      t.createIndex('savedAt', 'savedAt');
-      db.createObjectStore('audio', { keyPath: 'key' });
-      db.createObjectStore('kv', { keyPath: 'k' });
+    const r = indexedDB.open(DB_NAME, 2);
+    r.onupgradeneeded = e => {
+      const db = r.result, tx = r.transaction;
+      if (e.oldVersion > 0 && e.oldVersion < 2) { // formato antiguo: se rehace (el paquete se vuelve a bajar)
+        ['articles', 'titles'].forEach(n => db.objectStoreNames.contains(n) && db.deleteObjectStore(n));
+        tx.objectStore('kv').delete('pack');
+      }
+      if (!db.objectStoreNames.contains('articles')) db.createObjectStore('articles', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('titles')) db.createObjectStore('titles', { keyPath: 'key' }).createIndex('norm', 'norm');
+      if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio', { keyPath: 'key' });
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'k' });
     };
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -37,37 +42,46 @@ async function unpack(v) {
   return new Response(v.stream().pipeThrough(new DecompressionStream('gzip'))).text();
 }
 
-/** Save many articles in one transaction: [{lang, title, html}] */
-export async function putArticles(list, group = 4) {
-  // Comprimimos en grupos pequeños: cientos de streams a la vez agotan la memoria del iPhone.
-  const packed = [];
-  for (let i = 0; i < list.length; i += group)
-    packed.push(...await Promise.all(list.slice(i, i + group).map(async a => {
-      const body = a.text ?? a.html;
-      return { ...a, data: await pack(body), size: body.length, t: a.text != null ? 1 : 0 };
-    })));
+let renderer = null;
+/** Los artículos del paquete son texto plano; se convierten a HTML al abrirlos. */
+export const setRenderer = fn => { renderer = fn; };
+
+let seq = 0;
+const newId = () => `${Date.now().toString(36)}${(seq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** Guarda artículos: [{lang, title, text | html}]. Sirve para lotes grandes. */
+export async function putArticles(list, prefix = 'p') {
+  const chunks = [];
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const part = list.slice(i, i + CHUNK);
+    const id = prefix + newId();
+    const bodies = part.map(a => (a.text != null ? [a.text, 1] : [a.html, 0]));
+    chunks.push({ id, data: await pack(JSON.stringify(bodies)), part });
+  }
   const db = await openDB();
   const tx = db.transaction(['articles', 'titles'], 'readwrite');
-  const now = Date.now();
-  for (const a of packed) {
-    const key = keyOf(a.lang, a.title);
-    tx.objectStore('articles').put({ key, data: a.data, t: a.t });
-    tx.objectStore('titles').put({ key, lang: a.lang, title: a.title.replace(/_/g, ' '), norm: norm(a.title), size: a.size, savedAt: now });
+  const A = tx.objectStore('articles'), T = tx.objectStore('titles');
+  for (const c of chunks) {
+    A.put({ id: c.id, data: c.data });
+    c.part.forEach((a, i) => T.put({ key: keyOf(a.lang, a.title), lang: a.lang, title: a.title.replace(/_/g, ' '), norm: norm(a.title), c: c.id, i }));
   }
   return done(tx);
 }
-export const putArticle = a => putArticles([a]);
+export const putArticle = a => putArticles([a], 'u');
 
+const cache = { id: null, items: null };
 export async function getArticle(lang, title) {
   const db = await openDB();
-  const rec = await req(db.transaction('articles').objectStore('articles').get(keyOf(lang, title)));
-  if (!rec) return null;
-  const body = await unpack(rec.data);
-  return rec.t && renderer ? renderer(body) : body;
+  const t = await req(db.transaction('titles').objectStore('titles').get(keyOf(lang, title)));
+  if (!t) return null;
+  if (cache.id !== t.c) {
+    const rec = await req(db.transaction('articles').objectStore('articles').get(t.c));
+    if (!rec) return null;
+    cache.items = JSON.parse(await unpack(rec.data)); cache.id = t.c;
+  }
+  const [body, isText] = cache.items[t.i];
+  return isText && renderer ? renderer(body) : body;
 }
-let renderer = null;
-/** Los artículos del paquete se guardan como texto plano; se convierten a HTML al abrirlos. */
-export const setRenderer = fn => { renderer = fn; };
 
 export async function hasArticle(lang, title) {
   const db = await openDB();
@@ -78,7 +92,10 @@ export async function deleteArticle(lang, title) {
   const db = await openDB();
   const tx = db.transaction(['articles', 'titles'], 'readwrite');
   const k = keyOf(lang, title);
-  tx.objectStore('articles').delete(k); tx.objectStore('titles').delete(k);
+  const t = await req(tx.objectStore('titles').get(k));
+  tx.objectStore('titles').delete(k);
+  if (t && t.c.startsWith('u')) tx.objectStore('articles').delete(t.c); // solo los guardados uno a uno
+  cache.id = null;
   return done(tx);
 }
 
@@ -87,23 +104,22 @@ export async function countArticles() {
   return req(db.transaction('titles').objectStore('titles').count());
 }
 
-/** Offline title search: prefix via index, then substring scan (bounded). */
+/** Búsqueda sin conexión: por prefijo (índice) y, si faltan resultados, por coincidencia parcial acotada. */
 export async function searchLocal(q, lang, limit = 30) {
   const n = norm(q); if (!n) return [];
   const db = await openDB();
-  const idx = db.transaction('titles').objectStore('titles').index('norm');
   const out = new Map();
   await new Promise(res => {
-    const c = idx.openCursor(IDBKeyRange.bound(n, n + '￿'));
+    const c = db.transaction('titles').objectStore('titles').index('norm').openCursor(IDBKeyRange.bound(n, n + '￿'));
     c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit) return res();
       if (cur.value.lang === lang) out.set(cur.value.key, cur.value); cur.continue(); };
     c.onerror = res;
   });
-  if (out.size < limit) {
+  if (out.size < limit && n.length >= 3) {
     let scanned = 0;
     await new Promise(res => {
-      const c = db.transaction('titles').objectStore('titles').openCursor();
-      c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit || ++scanned > 400000) return res();
+      const c = db.transaction('titles').objectStore('titles').index('norm').openCursor();
+      c.onsuccess = () => { const cur = c.result; if (!cur || out.size >= limit || ++scanned > 300000) return res();
         const v = cur.value; if (v.lang === lang && v.norm.includes(n)) out.set(v.key, v); cur.continue(); };
       c.onerror = res;
     });
@@ -111,40 +127,33 @@ export async function searchLocal(q, lang, limit = 30) {
   return [...out.values()];
 }
 
-export async function recentArticles(limit = 50) {
-  const db = await openDB();
-  const out = [];
-  await new Promise(res => {
-    const c = db.transaction('titles').objectStore('titles').index('savedAt').openCursor(null, 'prev');
-    c.onsuccess = () => { const cur = c.result; if (!cur || out.length >= limit) return res(); out.push(cur.value); cur.continue(); };
-    c.onerror = res;
-  });
-  return out;
+/** Artículos abiertos o guardados a mano (los últimos). Lista pequeña en kv. */
+export async function recentArticles(limit = 15) { return ((await kvGet('recent')) || []).slice(0, limit); }
+export async function touchRecent(lang, title) {
+  const t = title.replace(/_/g, ' ');
+  const list = ((await kvGet('recent')) || []).filter(r => !(r.lang === lang && r.title === t));
+  list.unshift({ lang, title: t }); await kvSet('recent', list.slice(0, 50));
 }
 
 export async function randomLocal(lang) {
   const db = await openDB();
   const store = db.transaction('titles').objectStore('titles');
   const n = await req(store.count()); if (!n) return null;
-  let skip = Math.floor(Math.random() * n);
+  const skip = Math.floor(Math.random() * n);
   return new Promise(res => {
     const c = store.openCursor(); let first = true;
     c.onsuccess = () => { const cur = c.result; if (!cur) return res(null);
       if (first && skip) { first = false; return cur.advance(skip); }
       res(cur.value); };
+    c.onerror = () => res(null);
   });
-}
-
-export async function* allTitles() {
-  const db = await openDB();
-  const keys = await req(db.transaction('titles').objectStore('titles').getAll());
-  yield* keys;
 }
 
 export async function clearAll() {
   const db = await openDB();
-  const tx = db.transaction(['articles', 'titles'], 'readwrite');
-  tx.objectStore('articles').clear(); tx.objectStore('titles').clear();
+  const tx = db.transaction(['articles', 'titles', 'kv'], 'readwrite');
+  tx.objectStore('articles').clear(); tx.objectStore('titles').clear(); tx.objectStore('kv').delete('pack'); tx.objectStore('kv').delete('recent');
+  cache.id = null;
   return done(tx);
 }
 

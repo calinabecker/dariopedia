@@ -141,12 +141,12 @@ async function article(lang, title) {
       const a = await fetchArticle(lang, title);
       html = a.html; shownTitle = a.title;
       if (a.title !== title.replace(/_/g, ' ')) history.replaceState(null, '', articleHref(lang, a.title));
-      if (prefs.autoSave) { await db.putArticle(a); saved = true; cacheImages(html); }
+      if (prefs.autoSave) { await db.putArticle(a); await db.touchRecent(lang, a.title); saved = true; cacheImages(html); }
     } catch (e) {
       view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>No se ha podido cargar: ${esc(e.message)}</p></div>`; return;
     }
   }
-  document.title = `${shownTitle} — Dariopedia`;
+  document.title = `${shownTitle} — Dariopedia`; db.touchRecent(lang, shownTitle).catch(() => {});
   view.innerHTML = `
     <article class="article">
       <h1 class="title">${esc(shownTitle)}</h1>
@@ -160,7 +160,7 @@ async function article(lang, title) {
     </article>`;
   $('#saveBtn').onclick = async () => {
     if (saved) return;
-    await db.putArticle({ lang, title: shownTitle, html }); cacheImages(html);
+    await db.putArticle({ lang, title: shownTitle, html }); await db.touchRecent(lang, shownTitle); cacheImages(html);
     toast('Guardado para leer sin conexión'); article(lang, shownTitle);
   };
   $('#delBtn') && ($('#delBtn').onclick = async () => { await db.deleteArticle(lang, shownTitle); toast('Eliminado'); article(lang, shownTitle); });
@@ -194,11 +194,11 @@ function paintPack() {
   const go = $('#pkgGo'); if (go) { go.disabled = pack.running || pack.complete; go.textContent = pack.complete ? '✓ Todo descargado' : 'Descargar todo'; }
 }
 
-async function importShard(body, lowMem) {
+async function importShard(body, lowMem, onProgress) {
   const reader = body.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
-  const size = lowMem ? 50 : 150;
+  const size = lowMem ? 256 : 1024;
   let rest = '', batch = [], n = 0;
-  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await db.putArticles(b, lowMem ? 1 : 4); } };
+  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await db.putArticles(b); onProgress?.(n); await new Promise(r => setTimeout(r)); } };
   const handle = line => {
     if (!line) return;
     let o; try { o = JSON.parse(line); } catch { return; }
@@ -208,7 +208,7 @@ async function importShard(body, lowMem) {
     const { value, done } = await reader.read(); if (done) break;
     const lines = (rest + value).split('\n'); rest = lines.pop();
     lines.forEach(handle);
-    if (batch.length >= size) { await flush(); await new Promise(r => setTimeout(r)); } // deja respirar al navegador
+    if (batch.length >= size) await flush();
   }
   if (!pack.stop) handle(rest);
   await flush(); reader.cancel().catch(() => {});
@@ -233,10 +233,16 @@ async function installPack() {
       if (st.done.includes(name)) continue;
       if (pack.stop) break;
       pack.pct = (i / m.archivos.length) * 100;
-      pack.msg = `Descargando Dariopedia sin conexión… ${Math.round(pack.pct)} % (no cierres la app)`; paintPack();
+      pack.msg = `Descargando… ${Math.floor(pack.pct)} % (no cierres la app)`; paintPack();
       const r = await fetch('paquete/' + name, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      await importShard(r.body, lowMem);
+      const t0 = Date.now(), perShard = m.articulos / m.archivos.length;
+      await importShard(r.body, lowMem, n => {
+        pack.pct = ((i + Math.min(n / perShard, 1)) / m.archivos.length) * 100;
+        const rate = n / ((Date.now() - t0) / 1000);
+        const left = Math.round(((m.archivos.length - i - 1) * perShard + (perShard - n)) / Math.max(rate, 1) / 60);
+        pack.msg = `Descargando… ${Math.floor(pack.pct)} % · quedan ~${left} min (no cierres la app)`; paintPack();
+      });
       if (pack.stop) break;
       st.done.push(name); pack.done = st.done.length; await db.kvSet('pack', st);
     }
@@ -286,18 +292,6 @@ function downloads() {
   $('#pkgStop').onclick = () => { pack.stop = true; };
   packPending().then(p => { if (pack.complete && !pack.running) pack.msg = 'Todo descargado: ya puedes usar Dariopedia sin conexión.'; else if (!pack.running && !pack.error && p === false) pack.msg = 'El paquete todavía no está disponible.'; paintPack(); });
   paintPack();
-}
-
-/* ---------------- Exportar ---------------- */
-async function exportAll() {
-  const titles = [];
-  for await (const t of db.allTitles()) titles.push(t);
-  const parts = [];
-  for (const t of titles) parts.push(JSON.stringify({ lang: t.lang, title: t.title, html: await db.getArticle(t.lang, t.title) }) + '\n');
-  let blob = new Blob(parts, { type: 'application/x-ndjson' }), name = 'dariopedia.ndjson';
-  if (typeof CompressionStream !== 'undefined') { blob = await new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob(); name += '.gz'; }
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
 /* ---------------- Settings ---------------- */
@@ -353,7 +347,6 @@ async function settings() {
       <p class="hint">${est ? `Ocupa ${fmtBytes(est.usage || 0)}. El navegador te deja usar hasta ${fmtBytes(est.quota || 0)}.` : ''} ${persisted ? 'Almacenamiento persistente activado ✓' : 'El navegador podría borrar datos si falta espacio.'}</p>
       <div class="row">
         <button class="btn" id="persist">Pedir almacenamiento persistente</button>
-        <button class="btn" id="exp">Exportar mis artículos</button>
         <button class="btn danger" id="wipe">Borrar todos los artículos</button>
       </div>
     </div>`;
@@ -377,7 +370,6 @@ async function settings() {
   };
   $('#clrAudio').onclick = async () => { await db.audioClear(); toast('Audios borrados'); };
   $('#persist').onclick = async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Almacenamiento persistente activado' : 'El navegador no lo concedió (instala la app primero)'); settings(); };
-  $('#exp').onclick = () => { toast('Preparando exportación…'); exportAll(); };
   $('#wipe').onclick = async () => { if (confirm('¿Borrar todos los artículos guardados?')) { await db.clearAll(); toast('Borrado'); settings(); } };
 }
 
