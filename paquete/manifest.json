@@ -25,5 +25,13 @@
   "dariopedia-es-resumen-0020.ndjson.gz"
  ],
  "bytes": 325206387,
- "origen": "https://dumps.wikimedia.org/eswiki/latest/eswiki-latest-pages-articles.xml.bz2"
+ "origen": "https://dumps.wikimedia.org/eswiki/latest/eswiki-latest-pages-articles.xml.bz2",
+ "redirecciones": [
+  "dariopedia-es-redirecciones-0001.ndjson.gz",
+  "dariopedia-es-redirecciones-0002.ndjson.gz",
+  "dariopedia-es-redirecciones-0003.ndjson.gz",
+  "dariopedia-es-redirecciones-0004.ndjson.gz",
+  "dariopedia-es-redirecciones-0005.ndjson.gz"
+ ],
+ "n_redirecciones": 2014878
 }
