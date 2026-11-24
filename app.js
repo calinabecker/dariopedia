@@ -1,5 +1,6 @@
 import * as db from './db.js';
 import * as voice from './voice.js';
+import * as datos from './datos.js';
 
 const $ = s => document.querySelector(s);
 const view = $('#view');
@@ -80,69 +81,74 @@ async function cacheImages(html) {
 
 /* ---------------- Views ---------------- */
 async function home() {
-  const [n, recent] = await Promise.all([db.countArticles(), db.recentArticles(15)]);
-  const est = await navigator.storage?.estimate?.().catch(() => null);
+  const [idx, recent, est] = await Promise.all([datos.cargarIndice(), db.recentArticles(15), navigator.storage?.estimate?.().catch(() => null)]);
+  const e = await datos.estado();
   view.innerHTML = `
     <section class="hero">
       <h1>Dariopedia</h1>
       <p>La enciclopedia, disponible sin conexión.</p>
       <div class="stats">
-        <div><b>${n.toLocaleString('es')}</b>artículos guardados</div>
-        ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>ocupa en tu móvil</div><div><b>${fmtBytes(Math.max(0, (est.quota || 0) - (est.usage || 0)))}</b>de espacio disponible</div>` : ''}
+        <div><b>${e.instalado ? idx.articulos.toLocaleString('es') : '—'}</b>artículos sin conexión</div>
+        ${est ? `<div><b>${fmtBytes(est.usage || 0)}</b>ocupa en tu móvil</div>` : ''}
       </div>
       <div class="row" style="justify-content:center;margin-top:18px">
         <button class="btn" id="rnd">🎲 Artículo aleatorio</button>
-        <a class="btn primary" href="#/descargas">⬇︎ Descargar artículos</a>
+        ${e.instalado ? '' : '<a class="btn primary" href="#/descargas">⬇︎ Descargar</a>'}
       </div>
     </section>
-    <section class="card"><h2 style="margin-top:0">Guardados recientemente</h2>
-      ${recent.length ? `<ul class="list">${recent.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a><span class="badge">${r.lang}</span></li>`).join('')}</ul>`
-        : `<p class="empty">Todavía no hay artículos sin conexión. Busca algo o ve a <a href="#/descargas">Descargas</a>.</p>`}
+    <section class="card"><h2 style="margin-top:0">Recientes</h2>
+      ${recent.length ? `<ul class="list">${recent.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a></li>`).join('')}</ul>`
+        : `<p class="empty">${e.instalado ? 'Busca algo en la barra de arriba.' : 'Todavía no has descargado la enciclopedia. Ve a <a href="#/descargas">Descargas</a>.'}</p>`}
     </section>`;
   $('#rnd').onclick = async () => {
-    if (navigator.onLine) {
-      try { const j = await api(prefs.lang, { action: 'query', list: 'random', rnnamespace: 0, rnlimit: 1 }); return go(articleHref(prefs.lang, j.query.random[0].title)); } catch {}
-    }
-    const r = await db.randomLocal(prefs.lang);
-    r ? go(articleHref(r.lang, r.title)) : toast('No hay artículos guardados todavía.');
+    const t = await datos.aleatorio();
+    if (t) return go(articleHref(prefs.lang, t));
+    if (navigator.onLine) { try { const j = await api(prefs.lang, { action: 'query', list: 'random', rnnamespace: 0, rnlimit: 1 }); return go(articleHref(prefs.lang, j.query.random[0].title)); } catch {} }
+    toast('Descarga primero la enciclopedia.');
   };
 }
 
 async function search(q) {
   $('#q').value = q;
-  view.innerHTML = `<h2>Resultados para “${esc(q)}”</h2><div id="loc" class="card"><p class="hint">Buscando en tus artículos…</p></div><div id="onl"></div>`;
-  const local = await db.searchLocal(q, prefs.lang);
-  const exact = local.find(r => db.norm(r.title) === db.norm(q));
+  view.innerHTML = `<h2>Resultados para “${esc(q)}”</h2><div id="loc" class="card"><p class="hint">Buscando…</p></div><div id="onl"></div>`;
+  const [pack, mios] = await Promise.all([datos.buscar(q, 30), db.searchLocal(q, prefs.lang, 10)]);
+  const vistos = new Set(pack.map(r => datos.norm(r.title)));
+  const local = [...pack, ...mios.filter(r => !vistos.has(datos.norm(r.title))).map(r => ({ title: r.title, r: r.r ?? null }))].map(r => ({ ...r, lang: prefs.lang }));
+  const exact = local.find(r => datos.norm(r.title) === datos.norm(q));
   $('#loc').innerHTML = `<h3 style="margin-top:0">Sin conexión (${local.length})</h3>` + (local.length
     ? `<ul class="list">${local.map(r => `<li><a href="${articleHref(r.lang, r.title)}">${esc(r.title)}</a>${r.r ? ` <span class="hint">→ ${esc(r.r)}</span>` : ''}<span class="badge ok">sin conexión</span></li>`).join('')}</ul>`
-    : '<p class="hint">No hay nada guardado con ese título.</p>');
+    : '<p class="hint">No hay ningún título que empiece así en tu enciclopedia sin conexión.</p>');
   if (!navigator.onLine) return;
   $('#onl').innerHTML = '<div class="card"><p class="hint">Buscando en línea…</p></div>';
   try {
     const j = await api(prefs.lang, { action: 'query', list: 'search', srsearch: q, srlimit: 20, srprop: 'snippet' });
     const hits = j.query.search;
-    const have = await Promise.all(hits.map(h => db.hasArticle(prefs.lang, h.title)));
+    const have = await Promise.all(hits.map(async h => (await datos.existe(h.title)) || (await db.hasArticle(prefs.lang, h.title))));
     $('#onl').innerHTML = `<div class="card"><h3 style="margin-top:0">En línea (${hits.length})</h3><ul class="list">${hits.map((h, i) =>
       `<li><a href="${articleHref(prefs.lang, h.title)}">${esc(h.title)}</a>${have[i] ? '<span class="badge ok">sin conexión</span>' : ''}<small>${h.snippet.replace(/<(?!\/?span)[^>]+>/g, '')}…</small></li>`).join('')}</ul></div>`;
-    if (!exact && hits[0] && db.norm(hits[0].title) === db.norm(q)) go(articleHref(prefs.lang, hits[0].title), true);
+    if (!exact && hits[0] && datos.norm(hits[0].title) === datos.norm(q)) go(articleHref(prefs.lang, hits[0].title), true);
   } catch (e) { $('#onl').innerHTML = `<div class="card"><p class="hint">No se ha podido buscar en línea: ${esc(e.message)}</p></div>`; }
 }
 
 async function article(lang, title) {
   view.innerHTML = '<p class="empty">Cargando…</p>';
-  let html = await db.getArticle(lang, title), saved = !!html, shownTitle = title;
+  let html = await db.getArticle(lang, title), saved = !!html, shownTitle = title, resumen = false, desde = null;
   if (html) shownTitle = (await db.resolveTitle(lang, title)) || title;
+  if (!html && lang === prefs.lang) {
+    const hit = await datos.obtener(title);
+    if (hit) { html = textToHtml(hit.text); shownTitle = hit.title; resumen = true; desde = hit.desde; }
+  }
   if (!html) {
     if (!navigator.onLine) {
-      view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>Este artículo no está guardado y no hay conexión.</p>
-        <p><a href="#/s/${encodeURIComponent(title)}">Buscar títulos parecidos sin conexión</a></p></div>`;
+      view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>Este artículo no está en tu enciclopedia y no hay conexión.</p>
+        <p><a href="#/s/${encodeURIComponent(title)}">Buscar títulos parecidos</a></p></div>`;
       return;
     }
     try {
       const a = await fetchArticle(lang, title);
       html = a.html; shownTitle = a.title;
       if (a.title !== title.replace(/_/g, ' ')) history.replaceState(null, '', articleHref(lang, a.title));
-      if (prefs.autoSave) { await db.putArticle(a); await db.touchRecent(lang, a.title); saved = true; cacheImages(html); }
+      if (prefs.autoSave) { await db.putArticle(a); saved = true; cacheImages(html); }
     } catch (e) {
       view.innerHTML = `<div class="card"><h2>${esc(title)}</h2><p>No se ha podido cargar: ${esc(e.message)}</p></div>`; return;
     }
@@ -151,20 +157,25 @@ async function article(lang, title) {
   view.innerHTML = `
     <article class="article">
       <h1 class="title">${esc(shownTitle)}</h1>
+      ${desde ? `<p class="hint" style="margin:-2px 0 8px">(Redirigido desde «${esc(desde)}»)</p>` : ''}
       <div class="toolbar">
-        <button class="btn" id="readAll">🔊 Leer artículo</button>
-        <button class="btn" id="saveBtn">${saved ? '✓ Guardado sin conexión' : '⬇︎ Guardar sin conexión'}</button>
-        ${saved ? '<button class="btn danger" id="delBtn">Eliminar</button>' : ''}
+        <button class="btn" id="readAll">🔊 Leer</button>
+        ${resumen ? '<button class="btn" id="fullBtn">📖 Ver artículo completo</button>' : ''}
+        ${saved ? '<button class="btn danger" id="delBtn">Quitar guardado</button>' : ''}
       </div>
       <div id="body">${html}</div>
+      ${resumen ? '<p class="hint">Resumen disponible sin conexión. «Ver artículo completo» necesita internet.</p>' : ''}
       <p class="attrib">Contenido disponible bajo la licencia Creative Commons Atribución-CompartirIgual 4.0.</p>
     </article>`;
-  $('#saveBtn').onclick = async () => {
-    if (saved) return;
-    await db.putArticle({ lang, title: shownTitle, html }); await db.touchRecent(lang, shownTitle); cacheImages(html);
-    toast('Guardado para leer sin conexión'); article(lang, shownTitle);
-  };
-  $('#delBtn') && ($('#delBtn').onclick = async () => { await db.deleteArticle(lang, shownTitle); toast('Eliminado'); article(lang, shownTitle); });
+  $('#fullBtn') && ($('#fullBtn').onclick = async () => {
+    if (!navigator.onLine) return toast('Necesitas conexión para ver el artículo completo.');
+    const btn = $('#fullBtn'); btn.disabled = true; btn.textContent = 'Cargando…';
+    try {
+      const a = await fetchArticle(lang, shownTitle);
+      await db.putArticle(a); cacheImages(a.html); article(lang, a.title);
+    } catch (e) { btn.disabled = false; btn.textContent = '📖 Ver artículo completo'; toast('No se ha podido cargar: ' + e.message); }
+  });
+  $('#delBtn') && ($('#delBtn').onclick = async () => { await db.deleteArticle(lang, shownTitle); toast('Quitado'); article(lang, shownTitle); });
   $('#readAll').onclick = () => readText(articleText($('#body')), lang);
 }
 
@@ -174,8 +185,8 @@ function articleText(el) {
   return c.innerText;
 }
 
-/* ---------------- Paquete sin conexión (descarga automática) ---------------- */
-/** Párrafos y "## Título" del paquete de texto → HTML. */
+/* ---------------- Instalación de la enciclopedia ---------------- */
+/** Párrafos y "## Título" del texto plano → HTML. */
 function textToHtml(t) {
   return t.split('\n\n').map(p => {
     const m = p.match(/^(#{2,4}) (.*)$/);
@@ -183,103 +194,56 @@ function textToHtml(t) {
   }).join('');
 }
 
-db.setRenderer(textToHtml);
-const pack = { complete: false, running: false, stop: false, pct: 0, msg: '', done: 0, total: 0, error: '' };
+const inst = { running: false, ctl: null, hechos: 0, total: 0, bytes: 0, totalBytes: 0, vel: 0, completo: false, msg: '', error: '', wake: null };
 const dl = $('#dl');
-function paintPack() {
-  dl.hidden = !pack.running && !pack.error;
-  $('#dlTxt').textContent = pack.error || pack.msg;
-  $('#dlBar').value = pack.pct; $('#dlBar').hidden = !pack.running;
-  const st = $('#pkgState'); if (st) st.textContent = pack.error || pack.msg;
-  const bar = $('#pkgBar'); if (bar) { bar.value = pack.pct; bar.hidden = !pack.running; }
-  const go = $('#pkgGo'); if (go) { go.disabled = pack.running || pack.complete; go.textContent = pack.complete ? '✓ Todo descargado' : 'Descargar todo'; }
+const pct = () => (inst.total ? (inst.hechos / inst.total) * 100 : 0);
+function paintInst() {
+  const activo = inst.running;
+  dl.hidden = !activo && !inst.error;
+  const mins = inst.vel > 0 ? Math.max(1, Math.ceil((inst.totalBytes - inst.bytes) / inst.vel / 60)) : null;
+  const linea = inst.error || (activo ? `Descargando Dariopedia… ${Math.floor(pct())} %${mins && pct() > 2 ? ` · ~${mins} min` : ''}` : inst.msg);
+  $('#dlTxt').textContent = linea; $('#dlBar').value = pct(); $('#dlBar').hidden = !activo;
+  const st = $('#pkgState'); if (!st) return;
+  st.textContent = linea; $('#pkgBar').value = pct(); $('#pkgBar').hidden = !activo;
+  $('#pkgDetail').textContent = activo || inst.hechos
+    ? `${inst.hechos.toLocaleString('es')} de ${inst.total.toLocaleString('es')} bloques · ${fmtBytes(inst.bytes)} de ${fmtBytes(inst.totalBytes)}${activo && inst.vel ? ` · ${fmtBytes(inst.vel)}/s` : ''}` : '';
+  $('#pkgGo').hidden = activo || inst.completo; $('#pkgStop').hidden = !activo; $('#pkgDel').hidden = activo || !inst.hechos;
 }
 
-async function importShard(body, lowMem, aliases, onProgress) {
-  const reader = body.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
-  const size = lowMem ? 256 : 1024;
-  let rest = '', batch = [], n = 0;
-  const flush = async () => { if (batch.length) { n += batch.length; const b = batch; batch = []; await (aliases ? db.putAliases(b) : db.putArticles(b)); onProgress?.(n); await new Promise(r => setTimeout(r)); } };
-  const handle = line => {
-    if (!line) return;
-    let o; try { o = JSON.parse(line); } catch { return; }
-    if (aliases) { if (o.title && o.to) batch.push({ lang: o.lang || prefs.lang, title: o.title, to: o.to }); }
-    else if (o.text && o.title) batch.push({ lang: o.lang || prefs.lang, title: o.title, text: o.text });
-  };
-  while (!pack.stop) {
-    const { value, done } = await reader.read(); if (done) break;
-    const lines = (rest + value).split('\n'); rest = lines.pop();
-    lines.forEach(handle);
-    if (batch.length >= size) await flush();
-  }
-  if (!pack.stop) handle(rest);
-  await flush(); reader.cancel().catch(() => {});
-  return n;
-}
-
-async function installPack() {
-  if (pack.running) return;
-  pack.running = true; pack.stop = false; pack.error = ''; pack.msg = 'Preparando la descarga…'; paintPack();
+async function instalarDatos(auto) {
+  if (inst.running) return;
+  inst.running = true; inst.error = ''; inst.msg = ''; inst.ctl = { parar: false }; paintInst();
+  try { inst.wake = await navigator.wakeLock?.request('screen'); } catch {}
+  navigator.storage?.persist?.();
   try {
-    navigator.storage?.persist?.();
-    const m = await getManifest();
-    if (!m) throw new Error('SIN_PAQUETE');
-    let st = (await db.kvGet('pack')) || {};
-    if (st.id !== m.articulos + ':' + m.archivos.length) st = { id: m.articulos + ':' + m.archivos.length, done: [] };
-    // Si la sesión anterior se cerró sola (falta de memoria), seguimos en modo ligero.
-    if (st.busy) st.crashes = (st.crashes || 0) + 1;
-    const lowMem = (st.crashes || 0) > 0;
-    st.busy = true; await db.kvSet('pack', st);
-    const nombres = [...m.archivos, ...(m.redirecciones || [])];
-    pack.total = nombres.length; pack.done = st.done.length;
-    for (const [i, name] of nombres.entries()) {
-      if (st.done.includes(name)) continue;
-      if (pack.stop) break;
-      const esAlias = i >= m.archivos.length;
-      pack.pct = (i / nombres.length) * 100;
-      pack.msg = `Descargando… ${Math.floor(pack.pct)} % (no cierres la app)`; paintPack();
-      const r = await fetch('paquete/' + name, { cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const t0 = Date.now(), perShard = esAlias ? 500000 : m.articulos / m.archivos.length;
-      await importShard(r.body, lowMem, esAlias, n => {
-        pack.pct = ((i + Math.min(n / perShard, 1)) / nombres.length) * 100;
-        const rate = n / ((Date.now() - t0) / 1000);
-        const left = Math.round(((nombres.length - i - 1) * perShard + (perShard - n)) / Math.max(rate, 1) / 60);
-        pack.msg = `Descargando… ${Math.floor(pack.pct)} % · quedan ~${left} min (no cierres la app)`; paintPack();
-      });
-      if (pack.stop) break;
-      st.done.push(name); pack.done = st.done.length; await db.kvSet('pack', st);
-    }
-    st.busy = false; await db.kvSet('pack', st);
-    pack.pct = 100; pack.complete = !pack.stop;
-    pack.msg = pack.stop ? 'Descarga en pausa.' : `Listo ✓ ${(await db.countArticles()).toLocaleString('es')} artículos disponibles sin conexión.`;
+    const r = await datos.instalar(p => { Object.assign(inst, { hechos: p.hechos, total: p.total, bytes: p.bytes, totalBytes: p.totalBytes, vel: p.velocidad }); paintInst(); }, inst.ctl);
+    if (r.completo) { inst.completo = true; inst.msg = 'Listo ✓ Dariopedia ya funciona sin conexión.'; await db.kvSet('instalado', Date.now()); }
+    else if (r.pausado) inst.msg = 'Descarga en pausa. Pulsa «Continuar» cuando quieras.';
+    else inst.error = `No se han podido descargar ${r.faltan} bloques. Comprueba la conexión y pulsa «Continuar»: seguirá donde se quedó.`;
   } catch (e) {
-    try { const s2 = (await db.kvGet('pack')) || {}; s2.busy = false; await db.kvSet('pack', s2); } catch {}
-    pack.error = e.message === 'SIN_PAQUETE' ? 'El paquete de artículos todavía no está publicado. Vuelve a abrir la app más tarde.'
-      : /quota|storage/i.test(e.message) ? 'No hay espacio suficiente en el móvil.'
-      : 'La descarga se ha interrumpido (' + e.message + '). Se reanuda sola al volver a abrir la app con conexión.';
+    inst.error = e.message === 'SIN_DATOS' ? 'La enciclopedia todavía no está publicada. Vuelve a intentarlo más tarde.'
+      : e.message === 'SIN_ESPACIO' ? 'No hay espacio suficiente en el móvil. Libera espacio y pulsa «Continuar».'
+      : 'Se ha interrumpido la descarga (' + e.message + '). Pulsa «Continuar»: seguirá donde se quedó.';
   }
-  pack.running = false; paintPack();
-  if (location.hash.length < 3 || location.hash === '#/descargas') route();
-if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+  try { await inst.wake?.release(); } catch {}
+  inst.running = false;
+  const e = await datos.estado(); Object.assign(inst, { hechos: e.hechos, total: e.total || inst.total, completo: e.instalado });
+  paintInst();
+  if (/^#\/(descargas)?$/.test(location.hash) || !location.hash) route();
 }
 
-async function getManifest() {
-  try {
-    const r = await fetch('paquete/manifest.json', { cache: 'no-store' });
-    if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return null;
-    return await r.json();
-  } catch { return null; }
-}
-
-/** true = hay que descargar; false = ya está todo (o no hay paquete / no hay conexión). */
-async function packPending(auto) {
-  const m = await getManifest(); if (!m) return false;
-  const st = (await db.kvGet('pack')) || {};
-  if (auto && (st.crashes || 0) >= 3 && st.busy) { pack.error = 'La descarga se ha cerrado varias veces. Pulsa «Descargar todo» en Descargas para continuar.'; return false; }
-  const total = m.archivos.length + (m.redirecciones || []).length;
-  const ok = st.id === m.articulos + ':' + m.archivos.length && st.done?.length === total;
-  pack.complete = ok; return !ok;
+/** Al abrir la app: si falta algo o hay versión nueva, se instala solo. */
+async function comprobarInstalacion() {
+  const e = await datos.estado();
+  Object.assign(inst, { hechos: e.hechos, total: e.total, completo: e.instalado });
+  if (!navigator.onLine || inst.running) return paintInst();
+  let m = null; try { m = await datos.manifiesto(); } catch {}
+  if (!m) return paintInst();
+  const firma = x => x.bloques.map(b => b[4]).join('');
+  if (e.instalado && firma(e.idx) === firma(m)) return paintInst();
+  inst.total = m.bloques.length; inst.completo = false;
+  if (!/^#\/a\//.test(location.hash)) go('#/descargas');
+  instalarDatos(true);
 }
 
 function downloads() {
@@ -287,16 +251,28 @@ function downloads() {
     <h2>Descargas</h2>
     <div class="card">
       <h3 style="margin-top:0">Dariopedia sin conexión</h3>
-      <p class="hint">Todos los artículos en solo texto, sin imágenes. Se descargan solos la primera vez que abres la app
-      con conexión; si se interrumpe, continúa donde se quedó.</p>
+      <p class="hint">Casi 2 millones de artículos (resumen de cada uno) y 2 millones de redirecciones, solo texto y sin imágenes.
+      Ocupa unos 320 MB. Se descarga una sola vez y después funciona sin internet. Si se corta, continúa donde se quedó.</p>
       <progress id="pkgBar" max="100" value="0" hidden></progress>
-      <p id="pkgState" class="hint"></p>
-      <div class="row"><button class="btn primary" id="pkgGo">Descargar todo</button><button class="btn" id="pkgStop">Pausar</button></div>
+      <p id="pkgState" style="margin:10px 0 2px;font-weight:600"></p>
+      <p id="pkgDetail" class="hint" style="margin:0 0 12px"></p>
+      <div class="row">
+        <button class="btn primary" id="pkgGo">Descargar</button>
+        <button class="btn" id="pkgStop" hidden>Pausar</button>
+        <button class="btn danger" id="pkgDel" hidden>Borrar descarga</button>
+      </div>
     </div>`;
-  $('#pkgGo').onclick = () => { if (!navigator.onLine) return toast('Necesitas conexión para descargar.'); installPack(); };
-  $('#pkgStop').onclick = () => { pack.stop = true; };
-  packPending().then(p => { if (pack.complete && !pack.running) pack.msg = 'Todo descargado: ya puedes usar Dariopedia sin conexión.'; else if (!pack.running && !pack.error && p === false) pack.msg = 'El paquete todavía no está disponible.'; paintPack(); });
-  paintPack();
+  $('#pkgGo').onclick = () => { if (!navigator.onLine) return toast('Necesitas conexión para descargar.'); instalarDatos(); };
+  $('#pkgStop').onclick = () => { if (inst.ctl) inst.ctl.parar = true; };
+  $('#pkgDel').onclick = async () => { if (confirm('¿Borrar la enciclopedia descargada? Podrás volver a descargarla.')) { await datos.borrar(); Object.assign(inst, { hechos: 0, completo: false, msg: 'Descarga borrada.' }); downloads(); } };
+  datos.estado().then(e => {
+    if (!inst.running) { Object.assign(inst, { hechos: e.hechos, total: e.total, completo: e.instalado });
+      if (e.instalado) inst.msg = `Todo instalado: ${e.idx.articulos.toLocaleString('es')} artículos y ${e.idx.alias.toLocaleString('es')} redirecciones disponibles sin conexión.`;
+      else if (!inst.error && !inst.msg) inst.msg = e.hechos ? 'Descarga a medias. Pulsa «Descargar» para continuar.' : 'Todavía no has descargado la enciclopedia.'; }
+    if (e.idx) inst.totalBytes = e.idx.bytes;
+    paintInst();
+  });
+  paintInst();
 }
 
 /* ---------------- Settings ---------------- */
@@ -352,7 +328,7 @@ async function settings() {
       <p class="hint">${est ? `Ocupa ${fmtBytes(est.usage || 0)}. El navegador te deja usar hasta ${fmtBytes(est.quota || 0)}.` : ''} ${persisted ? 'Almacenamiento persistente activado ✓' : 'El navegador podría borrar datos si falta espacio.'}</p>
       <div class="row">
         <button class="btn" id="persist">Pedir almacenamiento persistente</button>
-        <button class="btn danger" id="wipe">Borrar todos los artículos</button>
+        <button class="btn danger" id="wipe">Borrar todo lo descargado</button>
       </div>
     </div>`;
   $('#lang').onchange = e => { prefs.lang = e.target.value; savePrefs(); toast('Idioma cambiado'); };
@@ -375,7 +351,7 @@ async function settings() {
   };
   $('#clrAudio').onclick = async () => { await db.audioClear(); toast('Audios borrados'); };
   $('#persist').onclick = async () => { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Almacenamiento persistente activado' : 'El navegador no lo concedió (instala la app primero)'); settings(); };
-  $('#wipe').onclick = async () => { if (confirm('¿Borrar todos los artículos guardados?')) { await db.clearAll(); toast('Borrado'); settings(); } };
+  $('#wipe').onclick = async () => { if (confirm('¿Borrar la enciclopedia descargada y los artículos guardados?')) { await datos.borrar(); await db.clearAll(); toast('Borrado'); settings(); } };
 }
 
 /* ---------------- Reading aloud ---------------- */
@@ -408,13 +384,20 @@ selBtn.onclick = () => { readText(getSelection().toString(), prefs.lang); selBtn
 function go(hash, replace) {
   if (replace) { history.replaceState(null, '', hash); return route(); }
   if (location.hash === hash) return route();
-if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+(async () => {
+  // Limpieza única del formato antiguo (base de datos de 2 millones de registros).
+  try { if (!(await db.kvGet('v3'))) { await db.clearAll(); await db.kvSet('v3', 1); } } catch {}
+  comprobarInstalacion();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !inst.running && !inst.completo) comprobarInstalacion(); });
+  addEventListener('online', () => { if (!inst.running && !inst.completo) comprobarInstalacion(); });
+})();
   location.hash = hash; // triggers route() via hashchange
 }
 async function route() {
   const h = location.hash.slice(1) || '/';
   const [, a, b, c] = h.split('/');
   scrollTo(0, 0); selBtn.hidden = true; document.title = 'Dariopedia';
+  if (a !== 's') $('#q').value = '';
   if (a === 'a' && b && c) return article(b, decodeURIComponent(c).replace(/_/g, ' '));
   if (a === 's' && b) return search(decodeURIComponent(b));
   if (a === 'descargas') return downloads();
@@ -434,4 +417,10 @@ addEventListener('online', net); addEventListener('offline', net); net();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 await voice.loadSettings();
 route();
-if (navigator.onLine) packPending(true).then(p => { if (p) { if (!location.hash.startsWith('#/a/')) go('#/descargas'); installPack(); } });
+(async () => {
+  // Limpieza única del formato antiguo (base de datos de 2 millones de registros).
+  try { if (!(await db.kvGet('v3'))) { await db.clearAll(); await db.kvSet('v3', 1); } } catch {}
+  comprobarInstalacion();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !inst.running && !inst.completo) comprobarInstalacion(); });
+  addEventListener('online', () => { if (!inst.running && !inst.completo) comprobarInstalacion(); });
+})();
